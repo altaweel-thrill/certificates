@@ -16,6 +16,65 @@ npm run dev
 npm run build
 ```
 
+## Firebase administrator login
+
+1. In Firebase Console, enable **Authentication > Email/Password**.
+2. Create the administrator account under **Authentication > Users**.
+3. Copy its UID, then create `users/{uid}` in Firestore with a string field
+   named `role` and the value `admin`. Add a string field named `name` for the
+   administrator's display name.
+4. Install and build the secure user-management functions:
+   `npm install --prefix functions && npm run build --prefix functions`.
+5. Deploy the included rules and functions with
+   `firebase deploy --only firestore:rules,storage,functions`.
+6. Add each production hostname under **Authentication > Settings >
+   Authorized domains**.
+
+The **Users and permissions** page creates Firebase Authentication accounts,
+changes `trainee`, `admin`, and `super_admin` roles, disables or enables
+accounts, and permanently deletes users. These operations run only through
+authenticated Cloud Functions; the browser never receives Admin SDK credentials.
+
+The application also accepts the privileged custom claims `admin: true`,
+`role: "admin"`, or `role: "super_admin"`. Custom claims are preferred when
+they are managed by a trusted server environment.
+
+## Trainee phone login
+
+The trainee signs in with the national ID and the Saudi mobile number stored by
+the Excel import. Firebase sends an SMS verification code. After the code is
+confirmed, the `activateTraineeSession` Cloud Function verifies that the phone
+number in the Firebase token matches the imported trainee record, then links
+the Firebase UID to that trainee document. Firestore and Storage rules restrict
+the signed-in trainee to that trainee's courses and certificates.
+
+Before using this flow:
+
+1. Enable **Authentication > Sign-in method > Phone** in Firebase Console.
+2. Under **Authentication > Settings > SMS region policy**, allow Saudi Arabia.
+3. Add the production hostname under **Authorized domains**.
+4. For local development, configure Firebase fictional test phone numbers and
+   codes; production SMS phone authentication must run from an authorized
+   hosted domain.
+5. Deploy the backend and access rules:
+   `firebase deploy --only functions,firestore:rules,storage`.
+
+## Certificate Excel import
+
+The importer validates the institute's 26-column `.xlsx` template before any
+records can continue to review. It checks required columns and values, Saudi
+national ID length, mobile number shape, duplicate certificate numbers,
+training hours and days, and Gregorian date fields. It reports exact Excel row
+numbers for the first validation issues and detects course names from the file.
+
+After validation, the administrator can save the file directly to Firestore.
+The import creates or updates `courses`, `trainees`, and `certificates`, and
+records progress in `imports`. Trainee document IDs use a SHA-256 hash of the
+national ID; the original national ID remains inside the admin-only document
+for later account matching. Writes are chunked to stay below Firestore batch
+limits, and only authenticated administrators are allowed by the deployed
+rules.
+
 This starter does not use `wrangler.jsonc`.
 
 ## Included Shape

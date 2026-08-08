@@ -1,0 +1,80 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return signedIn() && currentUser().data.role in ["admin", "super_admin"];
+    }
+
+    function isTrainee() {
+      return signedIn() && currentUser().data.role == "trainee";
+    }
+
+    function isCompany() {
+      return signedIn() &&
+        currentUser().data.role == "company_admin" &&
+        currentUser().data.companyDocumentId is string &&
+        get(/databases/$(database)/documents/companies/$(currentUser().data.companyDocumentId)).data.status != "disabled";
+    }
+
+    function companyId() {
+      return currentUser().data.companyDocumentId;
+    }
+
+    function ownsTrainee(traineeId) {
+      return isTrainee() && currentUser().data.traineeDocumentId == traineeId;
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (
+        request.auth.uid == userId || isAdmin()
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /courses/{courseId} {
+      allow read: if isAdmin() || isTrainee() || isCompany();
+      allow write: if isAdmin();
+    }
+
+    match /companies/{companyDocumentId} {
+      allow read: if isAdmin() || (isCompany() && companyId() == companyDocumentId);
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /trainees/{traineeId} {
+      allow read: if isAdmin() || ownsTrainee(traineeId) || (
+        isCompany() && resource.data.companyDocumentId == companyId()
+      );
+      allow write: if isAdmin();
+    }
+
+    match /certificates/{certificateId} {
+      allow read: if isAdmin() || (
+        isTrainee() &&
+        resource.data.traineeDocumentId ==
+          currentUser().data.traineeDocumentId
+      ) || (
+        isCompany() && resource.data.companyDocumentId == companyId()
+      );
+      allow write: if isAdmin();
+    }
+
+    match /imports/{importId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
