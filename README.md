@@ -16,6 +16,25 @@ npm run dev
 npm run build
 ```
 
+## Environment variables
+
+Copy `.env.example` to `.env.local` for local development. In production, add
+the same keys in the hosting provider's environment-variable settings before
+running the build. All Firebase browser configuration keys use the
+`NEXT_PUBLIC_` prefix because the Firebase Web SDK needs them in the browser;
+Firebase authorization still depends on Authentication, Firestore rules,
+Storage rules, and Cloud Functions.
+
+Required keys:
+
+- `NEXT_PUBLIC_FIREBASE_API_KEY`
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+- `NEXT_PUBLIC_FIREBASE_APP_ID`
+- `NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION`
+
 ## Firebase administrator login
 
 1. In Firebase Console, enable **Authentication > Email/Password**.
