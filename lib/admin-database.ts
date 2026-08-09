@@ -239,7 +239,7 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
       id: trainee.id,
       name: text(trainee.nameAr) || text(trainee.nameEn) || "متدرب دون اسم",
       nameEn: text(trainee.nameEn),
-      nationalId: text(trainee.nationalId).replace(/\D/g, "") || "غير متاح",
+      nationalId: text(trainee.nationalId) || "غير متاح",
       mobile: text(trainee.mobile),
       courses: relatedCourseNames,
       certificates: certificateCount,

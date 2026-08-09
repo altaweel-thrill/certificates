@@ -386,9 +386,10 @@ function normalizeSaudiMobile(value: unknown) {
 export const activateTraineeSession = onCall({ region: REGION }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "يجب التحقق من رقم الجوال أولاً.");
 
-  const nationalId = digits((request.data as Record<string, unknown>)?.nationalId);
+  const nationalIdValue = (request.data as Record<string, unknown>)?.nationalId;
+  const nationalId = typeof nationalIdValue === "string" ? nationalIdValue.trim() : "";
   const verifiedMobile = normalizeSaudiMobile(request.auth.token.phone_number);
-  if (!/^\d{10}$/.test(nationalId) || !verifiedMobile) {
+  if (!nationalId || nationalId.length > 200 || !verifiedMobile) {
     throw new HttpsError("invalid-argument", "بيانات التحقق غير صحيحة.");
   }
 

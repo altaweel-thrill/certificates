@@ -42,11 +42,11 @@ function mobile(value: CertificateImportValue) {
 function date(value: CertificateImportValue) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
   const valueText = text(value);
-  const gregorian = valueText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const gregorian = valueText.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (gregorian) {
     return new Date(Date.UTC(Number(gregorian[3]), Number(gregorian[2]) - 1, Number(gregorian[1])));
   }
-  const iso = valueText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const iso = valueText.match(/^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/);
   if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
   return null;
 }
@@ -62,7 +62,7 @@ async function sha256(value: string) {
 }
 
 async function prepareRecord(source: CertificateImportRecord): Promise<PreparedRecord> {
-  const nationalId = digits(source.Nat_ID_no);
+  const nationalId = text(source.Nat_ID_no);
   const companyCRNumber = digits(source.CompanyCRNumber) || digits(source.CrNumber);
   return {
     source,
@@ -140,7 +140,7 @@ export async function importCertificatesToFirestore(
 
         batch.set(doc(database, "trainees", traineeDocumentId), {
           traineeId: text(source.TraineeID),
-          nationalId: digits(source.Nat_ID_no),
+          nationalId: text(source.Nat_ID_no),
           nameAr: text(source.TName_ar),
           nameEn: text(source.TName_en).replace(/^:\s*/, ""),
           mobile: mobile(source.mobile),

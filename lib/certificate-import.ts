@@ -74,8 +74,9 @@ function digits(value: ImportCell) {
 
 function hasDate(value: ImportCell) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return true;
-  return /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(cellText(value)) ||
-    /^\d{4}-\d{2}-\d{2}$/.test(cellText(value));
+  const valueText = cellText(value);
+  return /^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(valueText) ||
+    /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(valueText);
 }
 
 export function validateCertificateRows(rows: ImportCell[][]): CertificateImportResult {
@@ -130,11 +131,6 @@ export function validateCertificateRows(rows: ImportCell[][]): CertificateImport
       }
     });
 
-    const nationalId = digits(get(row, "Nat_ID_no"));
-    if (nationalId && !/^\d{10}$/.test(nationalId)) {
-      rowErrors.push({ row: excelRow, field: "Nat_ID_no", message: "رقم الهوية يجب أن يتكون من 10 أرقام" });
-    }
-
     const mobile = digits(get(row, "mobile"));
     const normalizedMobile = mobile.length === 9 && mobile.startsWith("5") ? `0${mobile}` : mobile;
     if (mobile && !/^05\d{8}$/.test(normalizedMobile) && !/^9665\d{8}$/.test(mobile)) {
@@ -152,15 +148,16 @@ export function validateCertificateRows(rows: ImportCell[][]): CertificateImport
     const hours = cellNumber(get(row, "No_Of_Hrs"));
     const days = cellNumber(get(row, "No_of_Days"));
     if (hours === null || hours <= 0) {
-      rowErrors.push({ row: excelRow, field: "No_Of_Hrs", message: "عدد الساعات يجب أن يكون أكبر من صفر" });
+      warnings.push({ row: excelRow, field: "No_Of_Hrs", message: "عدد الساعات غير محدد وسيتم حفظه بقيمة صفر" });
     }
     if (days === null || days <= 0) {
-      rowErrors.push({ row: excelRow, field: "No_of_Days", message: "عدد الأيام يجب أن يكون أكبر من صفر" });
+      warnings.push({ row: excelRow, field: "No_of_Days", message: "عدد الأيام غير محدد وسيتم حفظه بقيمة صفر" });
     }
 
     (["DOB", "StartingDate", "EndDate", "IssueDate"] as CertificateImportHeader[]).forEach((field) => {
-      if (!hasDate(get(row, field))) {
-        rowErrors.push({ row: excelRow, field, message: "صيغة التاريخ غير صحيحة" });
+      const value = get(row, field);
+      if (cellText(value) && !hasDate(value)) {
+        warnings.push({ row: excelRow, field, message: "تعذر قراءة التاريخ وسيتم حفظه دون تاريخ" });
       }
     });
 

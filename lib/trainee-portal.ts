@@ -126,8 +126,8 @@ export function destroyTraineeRecaptcha() {
 }
 
 export async function activateTraineeSession(confirmation: ConfirmationResult, code: string, nationalId: string): Promise<TraineeProfile> {
-  const identity = digits(nationalId);
-  if (!/^\d{10}$/.test(identity)) throw new Error("رقم الهوية يجب أن يتكون من 10 أرقام.");
+  const identity = nationalId.trim();
+  if (!identity) throw new Error("أدخل رقم الهوية أو المعرّف المسجل.");
   if (!/^\d{6}$/.test(digits(code))) throw new Error("رمز التحقق يجب أن يتكون من 6 أرقام.");
 
   await confirmation.confirm(digits(code));

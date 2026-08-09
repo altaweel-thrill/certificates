@@ -114,8 +114,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
         const profile = await activateTraineeSession(confirmation, verificationCode, identity);
         onLogin({ role: "trainee", profile });
       } else {
-        const identityDigits = identity.replace(/\D/g, "");
-        if (!/^\d{10}$/.test(identityDigits)) throw new Error("رقم الهوية يجب أن يتكون من 10 أرقام.");
+        if (!identity.trim()) throw new Error("أدخل رقم الهوية أو المعرّف المسجل.");
         setConfirmation(await sendTraineeVerificationCode(mobile));
       }
     } catch (authError) {
@@ -194,8 +193,8 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
                 <input id="verification-code" inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" required autoFocus />
                 <p className="field-note">أدخل الرمز المكوّن من 6 أرقام المرسل عبر SMS.</p>
               </> : <>
-                  <label htmlFor="national-id">رقم الهوية</label>
-                  <input id="national-id" inputMode="numeric" autoComplete="off" maxLength={10} value={identity} onChange={(e) => setIdentity(e.target.value.replace(/\D/g, ""))} placeholder="رقم الهوية من 10 أرقام" required />
+                  <label htmlFor="national-id">رقم الهوية أو المعرّف</label>
+                  <input id="national-id" autoComplete="off" value={identity} onChange={(e) => setIdentity(e.target.value)} placeholder="أدخل القيمة المسجلة لدى المعهد" required />
                   <label htmlFor="mobile">رقم الجوال المسجل</label>
                   <input id="mobile" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="05xxxxxxxx" required />
                   <p className="field-note">سيصل رمز SMS إلى الجوال المسجل. باستخدام الخدمة توافق على إرسال رقم الجوال للتحقق.</p>
