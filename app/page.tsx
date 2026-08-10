@@ -341,16 +341,102 @@ function CoursesView({ courses, loading, error, onRetry }: { courses: DatabaseCo
   );
 }
 
-function TraineesView({ trainees, loading, error, onRetry }: { trainees: DatabaseTrainee[]; loading: boolean; error: string; onRetry: () => void }) {
+function TraineesView({ trainees, certificates, loading, error, onRetry, onMessage }: {
+  trainees: DatabaseTrainee[];
+  certificates: DatabaseCertificate[];
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  onMessage: (message: string) => void;
+}) {
   const [search, setSearch] = useState("");
+  const [selectedTraineeId, setSelectedTraineeId] = useState("");
+  const [downloadingKey, setDownloadingKey] = useState("");
   const deferredSearch = useDeferredValue(search);
   const filtered = useMemo(() => trainees.filter((trainee) => `${trainee.name} ${trainee.nameEn} ${trainee.nationalId} ${trainee.mobile} ${trainee.courses.join(" ")}`.toLocaleLowerCase().includes(deferredSearch.trim().toLocaleLowerCase())), [deferredSearch, trainees]);
+  const selectedTrainee = trainees.find((trainee) => trainee.id === selectedTraineeId) ?? null;
+  const selectedCertificates = useMemo(
+    () => certificates.filter((certificate) => certificate.traineeDocumentId === selectedTraineeId),
+    [certificates, selectedTraineeId],
+  );
+  const availableFiles = selectedCertificates.reduce((total, certificate) => total + certificate.files.length, 0);
+
+  async function download(certificate: DatabaseCertificate, file: DatabaseCertificateFile) {
+    if (!selectedTrainee) return;
+    const key = `${certificate.id}-${file.type}`;
+    setDownloadingKey(key);
+    try {
+      await downloadCertificateFile(certificate, file, selectedTrainee.nameEn);
+      onMessage(`بدأ تنزيل ${file.label}`);
+    } catch (downloadError) {
+      onMessage(getCertificateDownloadError(downloadError));
+    } finally {
+      setDownloadingKey("");
+    }
+  }
+
+  if (selectedTrainee) {
+    return (
+      <section className="company-detail-page trainee-detail-page">
+        <div className="company-detail-toolbar">
+          <button type="button" className="text-button company-back-button" onClick={() => setSelectedTraineeId("")}>العودة إلى المتدربين</button>
+          <button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>{loading ? "جارٍ التحديث..." : "تحديث البيانات"}</button>
+        </div>
+
+        <header className="company-detail-hero trainee-detail-hero">
+          <div>
+            <p className="eyebrow">صفحة المتدرب</p>
+            <h1>{selectedTrainee.name}</h1>
+            <p dir="ltr">{selectedTrainee.nameEn || "English name not available"}</p>
+          </div>
+          <StatusBadge status={selectedTrainee.state} />
+        </header>
+
+        {error ? <p className="auth-error" role="alert">{error}</p> : null}
+
+        <section className="metrics-grid company-detail-metrics">
+          <article className="metric-card"><p>الدورات</p><strong>{selectedTrainee.courses.length}</strong><small>الدورات المرتبطة بالمتدرب</small></article>
+          <article className="metric-card"><p>سجلات الشهادات</p><strong>{selectedCertificates.length}</strong><small>وفق بيانات الدورات</small></article>
+          <article className="metric-card"><p>ملفات PDF</p><strong>{availableFiles}</strong><small>ملفات متاحة للتنزيل</small></article>
+        </section>
+
+        <section className="panel company-detail-section trainee-profile-section">
+          <div className="panel-head"><div><h2>بيانات المتدرب</h2><p>البيانات المسجلة في قواعد بيانات المعهد</p></div></div>
+          <dl className="trainee-detail-info-grid">
+            <div><dt>رقم الهوية أو المعرّف</dt><dd dir="ltr">{selectedTrainee.nationalId}</dd></div>
+            <div><dt>رقم الجوال</dt><dd dir="ltr">{selectedTrainee.mobile || "—"}</dd></div>
+            <div><dt>رقم المتدرب</dt><dd dir="ltr">{selectedTrainee.traineeId || "—"}</dd></div>
+            <div><dt>الجنسية</dt><dd>{selectedTrainee.nationality}</dd></div>
+            <div><dt>الجنس</dt><dd>{selectedTrainee.gender}</dd></div>
+            <div><dt>تاريخ الميلاد</dt><dd>{selectedTrainee.dateOfBirth}</dd></div>
+          </dl>
+        </section>
+
+        <section className="panel company-detail-section">
+          <div className="panel-head"><div><h2>الدورات</h2><p>جميع الدورات المرتبطة بسجل المتدرب</p></div></div>
+          {selectedTrainee.courses.length ? <div className="trainee-detail-courses">{selectedTrainee.courses.map((course, index) => <article key={`${course}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{course}</strong></article>)}</div> : <div className="empty-state"><strong>لا توجد دورات مرتبطة</strong><p>ستظهر الدورات هنا بعد استيراد بياناتها من ملف Excel.</p></div>}
+        </section>
+
+        <section className="panel company-detail-section">
+          <div className="panel-head"><div><h2>الشهادات</h2><p>الشهادات المحلية والدولية والبطاقات المتاحة للمتدرب</p></div></div>
+          {selectedCertificates.length ? <div className="trainee-certificates-list">{selectedCertificates.map((certificate) => <article className="trainee-certificate-record" key={certificate.id}>
+            <div className="trainee-certificate-summary"><span className="pdf-mark">PDF</span><div><strong>شهادة رقم <span dir="ltr">{certificate.number}</span></strong><p>{certificate.course} · {certificate.issueDate}</p></div><StatusBadge status={certificate.status} /></div>
+            {certificate.files.length ? <div className="trainee-certificate-files">{certificate.files.map((file) => {
+              const key = `${certificate.id}-${file.type}`;
+              return <button type="button" className="secondary-button" key={key} onClick={() => void download(certificate, file)} disabled={Boolean(downloadingKey)}>{downloadingKey === key ? "جارٍ التنزيل..." : `تنزيل ${file.label}`}</button>;
+            })}</div> : <p className="trainee-file-empty">لم يُرفع ملف PDF لهذه الشهادة بعد.</p>}
+          </article>)}</div> : <div className="empty-state"><strong>لا توجد شهادات مسجلة</strong><p>ستظهر الشهادات هنا عند ربطها برقم الشهادة ورفع ملفات PDF.</p></div>}
+        </section>
+      </section>
+    );
+  }
+
   return (
     <section className="panel full-panel">
-      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>البحث برقم الهوية الكامل أو الاسم أو الدورة</p></div><label className="search-field" htmlFor="trainee-search"><span>بحث</span><input id="trainee-search" inputMode="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="اكتب الاسم أو رقم الهوية..." /></label></div>
+      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>اضغط على اسم المتدرب لعرض بياناته ودوراته وشهاداته</p></div><label className="search-field" htmlFor="trainee-search"><span>بحث</span><input id="trainee-search" inputMode="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="اكتب الاسم أو رقم الهوية..." /></label></div>
       <DataMessage loading={loading} error={error} empty={!trainees.length ? "لا يوجد متدربون مسجلون" : undefined} onRetry={onRetry} />
       {!loading && !error && trainees.length ? <div className="table-scroll">
-        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th></tr></thead><tbody>{filtered.map((trainee) => <tr key={trainee.id}><td><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn}</small></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td></tr>)}</tbody></table>
+        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>{filtered.map((trainee) => <tr key={trainee.id}><td><button type="button" className="company-name-button trainee-name-button" onClick={() => setSelectedTraineeId(trainee.id)}><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn || "عرض صفحة المتدرب"}</small></button></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td><td><button type="button" className="secondary-button table-open-button" onClick={() => setSelectedTraineeId(trainee.id)}>فتح</button></td></tr>)}</tbody></table>
       </div> : null}
       {!loading && !error && trainees.length > 0 && !filtered.length ? <div className="empty-state"><strong>لا توجد نتائج مطابقة</strong><p>جرّب البحث بجزء من الاسم أو رقم الهوية.</p></div> : null}
     </section>
@@ -1009,7 +1095,7 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
         <main id="main-content" className="dashboard-content">
           {view === "overview" && <Overview onImport={() => setModal("import")} adminName={profile.name} data={databaseData} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "courses" && <CoursesView courses={courses} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
-          {view === "trainees" && <TraineesView trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
+          {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onMessage={showToast} />}
           {view === "companies" && <CompaniesView companies={companies} trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "users" && <UsersView currentUser={profile} />}
           {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={refreshDatabase} />}

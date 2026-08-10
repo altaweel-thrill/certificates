@@ -172,6 +172,25 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
 .company-detail-section { overflow: hidden; }
 .company-detail-section .panel-head h2 { font-size: 18px; }
 .company-detail-section input[readonly] { color: var(--muted); background: #f1f4f6; cursor: not-allowed; }
+.trainee-detail-hero { position: relative; background: linear-gradient(135deg, #294492, #1d2d62); }
+.trainee-detail-hero::after { content: ""; position: absolute; width: 210px; height: 210px; left: -55px; bottom: -150px; border: 35px solid rgba(139,197,63,.15); border-radius: 50%; pointer-events: none; }
+.trainee-detail-hero > * { position: relative; z-index: 1; }
+.trainee-detail-info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 20px; }
+.trainee-detail-info-grid div { min-width: 0; padding: 15px 16px; border: 1px solid #e1e7ed; border-radius: 12px; background: #fbfcfd; }
+.trainee-detail-info-grid dt { margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.trainee-detail-info-grid dd { margin: 0; overflow-wrap: anywhere; color: var(--ink-strong); font-size: 14px; font-weight: 800; }
+.trainee-detail-courses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 20px; }
+.trainee-detail-courses article { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 11px; padding: 13px 14px; border: 1px solid #e1e7ed; border-radius: 12px; background: #fbfcfd; }
+.trainee-detail-courses span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: var(--blue); background: #edf2ff; font-size: 12px; font-weight: 900; }
+.trainee-detail-courses strong { color: var(--ink-strong); font-size: 13px; line-height: 1.7; }
+.trainee-certificates-list { display: grid; gap: 10px; padding: 20px; }
+.trainee-certificate-record { padding: 15px; border: 1px solid #e1e7ed; border-radius: 13px; background: #fbfcfd; }
+.trainee-certificate-summary { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.trainee-certificate-summary strong { color: var(--ink-strong); font-size: 13px; }
+.trainee-certificate-summary p, .trainee-file-empty { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.trainee-certificate-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; padding-top: 13px; border-top: 1px solid #e5eaf0; }
+.trainee-certificate-files .secondary-button { min-height: 38px; }
+.table-open-button { min-height: 38px; padding: 7px 13px; }
 .activity-panel { overflow: hidden; }
 .activity-list { padding: 4px 20px 12px; }
 .activity-item { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 13px 0; }
@@ -392,6 +411,12 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
   .company-detail-toolbar { align-items: stretch; flex-direction: column; }
   .company-detail-hero { align-items: flex-start; flex-direction: column; padding: 24px; }
   .company-detail-metrics { grid-template-columns: 1fr; }
+  .trainee-detail-info-grid, .trainee-detail-courses { grid-template-columns: 1fr; }
+  .trainee-detail-info-grid, .trainee-detail-courses, .trainee-certificates-list { padding: 14px; }
+  .trainee-certificate-summary { grid-template-columns: 38px minmax(0, 1fr); }
+  .trainee-certificate-summary > .status-badge { grid-column: 2; justify-self: start; }
+  .trainee-certificate-files { display: grid; grid-template-columns: 1fr; }
+  .trainee-certificate-files .secondary-button { width: 100%; }
   .activity-list { display: block; }
   .stacked-mobile { align-items: stretch; flex-direction: column; }
   .search-field input { width: 100%; }

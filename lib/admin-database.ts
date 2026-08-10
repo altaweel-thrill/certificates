@@ -21,6 +21,10 @@ export type DatabaseTrainee = {
   nameEn: string;
   nationalId: string;
   mobile: string;
+  traineeId: string;
+  nationality: string;
+  gender: string;
+  dateOfBirth: string;
   courses: string[];
   certificates: number;
   state: "مكتمل" | "لا توجد شهادات";
@@ -38,6 +42,8 @@ export type DatabaseCertificateFile = {
 
 export type DatabaseCertificate = {
   id: string;
+  traineeDocumentId: string;
+  courseDocumentId: string;
   number: string;
   owner: string;
   ownerEn: string;
@@ -241,6 +247,10 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
       nameEn: text(trainee.nameEn),
       nationalId: text(trainee.nationalId) || "غير متاح",
       mobile: text(trainee.mobile),
+      traineeId: text(trainee.traineeId),
+      nationality: text(trainee.nationalityAr) || text(trainee.nationality) || "غير محددة",
+      gender: text(trainee.gender) || "غير محدد",
+      dateOfBirth: formatDate(trainee.dateOfBirth),
       courses: relatedCourseNames,
       certificates: certificateCount,
       state: certificateCount ? "مكتمل" : "لا توجد شهادات",
@@ -277,6 +287,8 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
     });
     return {
       id: certificate.id,
+      traineeDocumentId: text(certificate.traineeDocumentId),
+      courseDocumentId: text(certificate.courseDocumentId),
       number: text(certificate.certificateNumber) || certificate.id,
       owner: trainee ? text(trainee.nameAr) || text(trainee.nameEn) : "متدرب غير معروف",
       ownerEn: trainee ? text(trainee.nameEn).replace(/^:\s*/, "") : "",
