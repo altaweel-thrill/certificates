@@ -61,6 +61,7 @@ import {
   sendTraineeVerificationCode,
   type TraineePortalData,
 } from "../lib/trainee-portal";
+import { getTraineeAdminError, updateTraineeDetails, type UpdateTraineeInput } from "../lib/trainee-admin";
 import { signInCompany, getCompanyAuthError } from "../lib/company-auth";
 import { CompaniesView } from "./companies-view";
 import { CompanyDashboard } from "./company-dashboard";
@@ -341,17 +342,31 @@ function CoursesView({ courses, loading, error, onRetry }: { courses: DatabaseCo
   );
 }
 
-function TraineesView({ trainees, certificates, loading, error, onRetry, onMessage }: {
+function TraineesView({ trainees, certificates, loading, error, onRetry, onChanged, onMessage }: {
   trainees: DatabaseTrainee[];
   certificates: DatabaseCertificate[];
   loading: boolean;
   error: string;
   onRetry: () => void;
+  onChanged: () => void | Promise<void>;
   onMessage: (message: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [selectedTraineeId, setSelectedTraineeId] = useState("");
   const [downloadingKey, setDownloadingKey] = useState("");
+  const [showEdit, setShowEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [editForm, setEditForm] = useState<Omit<UpdateTraineeInput, "traineeDocumentId">>({
+    nameAr: "",
+    nameEn: "",
+    nationalId: "",
+    mobile: "",
+    traineeId: "",
+    nationality: "",
+    gender: "",
+    dateOfBirth: "",
+  });
   const deferredSearch = useDeferredValue(search);
   const filtered = useMemo(() => trainees.filter((trainee) => `${trainee.name} ${trainee.nameEn} ${trainee.nationalId} ${trainee.mobile} ${trainee.courses.join(" ")}`.toLocaleLowerCase().includes(deferredSearch.trim().toLocaleLowerCase())), [deferredSearch, trainees]);
   const selectedTrainee = trainees.find((trainee) => trainee.id === selectedTraineeId) ?? null;
@@ -360,6 +375,50 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onMessa
     [certificates, selectedTraineeId],
   );
   const availableFiles = selectedCertificates.reduce((total, certificate) => total + certificate.files.length, 0);
+
+  function openEdit() {
+    if (!selectedTrainee) return;
+    setEditForm({
+      nameAr: selectedTrainee.nameAr,
+      nameEn: selectedTrainee.nameEn,
+      nationalId: selectedTrainee.nationalId === "غير متاح" ? "" : selectedTrainee.nationalId,
+      mobile: selectedTrainee.mobile,
+      traineeId: selectedTrainee.traineeId,
+      nationality: selectedTrainee.nationality === "غير محددة" ? "" : selectedTrainee.nationality,
+      gender: selectedTrainee.gender === "غير محدد" ? "" : selectedTrainee.gender,
+      dateOfBirth: selectedTrainee.dateOfBirthValue,
+    });
+    setFormError("");
+    setShowEdit(true);
+  }
+
+  function changeEditField(field: keyof typeof editForm, value: string) {
+    setEditForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function closeEdit() {
+    if (saving) return;
+    setShowEdit(false);
+    setFormError("");
+  }
+
+  async function submitEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedTrainee) return;
+    setSaving(true);
+    setFormError("");
+    try {
+      const result = await updateTraineeDetails({ traineeDocumentId: selectedTrainee.id, ...editForm });
+      setShowEdit(false);
+      await onChanged();
+      setSelectedTraineeId(result.traineeDocumentId);
+      onMessage("تم تحديث بيانات المتدرب");
+    } catch (requestError) {
+      setFormError(getTraineeAdminError(requestError));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function download(certificate: DatabaseCertificate, file: DatabaseCertificateFile) {
     if (!selectedTrainee) return;
@@ -377,10 +436,11 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onMessa
 
   if (selectedTrainee) {
     return (
+      <>
       <section className="company-detail-page trainee-detail-page">
         <div className="company-detail-toolbar">
           <button type="button" className="text-button company-back-button" onClick={() => setSelectedTraineeId("")}>العودة إلى المتدربين</button>
-          <button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>{loading ? "جارٍ التحديث..." : "تحديث البيانات"}</button>
+          <div className="heading-actions"><button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>{loading ? "جارٍ التحديث..." : "تحديث البيانات"}</button><button type="button" className="primary-button" onClick={openEdit}>تعديل بيانات المتدرب</button></div>
         </div>
 
         <header className="company-detail-hero trainee-detail-hero">
@@ -428,6 +488,16 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onMessa
           </article>)}</div> : <div className="empty-state"><strong>لا توجد شهادات مسجلة</strong><p>ستظهر الشهادات هنا عند ربطها برقم الشهادة ورفع ملفات PDF.</p></div>}
         </section>
       </section>
+      {showEdit ? <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeEdit(); }}><section className="modal trainee-edit-modal" role="dialog" aria-modal="true" aria-labelledby="trainee-edit-title"><div className="modal-head"><div><p className="eyebrow">صفحة المتدرب</p><h2 id="trainee-edit-title">تعديل بيانات المتدرب</h2></div><button type="button" className="close-button" onClick={closeEdit} disabled={saving}>إغلاق</button></div><form onSubmit={submitEdit}>
+        <div className="field-grid"><div><label htmlFor="trainee-edit-name-ar">الاسم بالعربية</label><input id="trainee-edit-name-ar" value={editForm.nameAr} onChange={(event) => changeEditField("nameAr", event.target.value)} maxLength={250} autoFocus /></div><div><label htmlFor="trainee-edit-name-en">الاسم بالإنجليزية</label><input id="trainee-edit-name-en" dir="ltr" value={editForm.nameEn} onChange={(event) => changeEditField("nameEn", event.target.value)} maxLength={250} /></div></div>
+        <div className="field-grid"><div><label htmlFor="trainee-edit-national-id">رقم الهوية أو المعرّف</label><input id="trainee-edit-national-id" dir="ltr" value={editForm.nationalId} onChange={(event) => changeEditField("nationalId", event.target.value)} maxLength={200} required /></div><div><label htmlFor="trainee-edit-mobile">رقم الجوال</label><input id="trainee-edit-mobile" type="tel" dir="ltr" inputMode="tel" placeholder="05xxxxxxxx" value={editForm.mobile} onChange={(event) => changeEditField("mobile", event.target.value)} maxLength={30} /></div></div>
+        <div className="field-grid"><div><label htmlFor="trainee-edit-id">رقم المتدرب</label><input id="trainee-edit-id" dir="ltr" value={editForm.traineeId} onChange={(event) => changeEditField("traineeId", event.target.value)} maxLength={100} /></div><div><label htmlFor="trainee-edit-nationality">الجنسية</label><input id="trainee-edit-nationality" value={editForm.nationality} onChange={(event) => changeEditField("nationality", event.target.value)} maxLength={100} /></div></div>
+        <div className="field-grid"><div><label htmlFor="trainee-edit-gender">الجنس</label><input id="trainee-edit-gender" value={editForm.gender} onChange={(event) => changeEditField("gender", event.target.value)} maxLength={50} /></div><div><label htmlFor="trainee-edit-date">تاريخ الميلاد</label><input id="trainee-edit-date" type="date" dir="ltr" value={editForm.dateOfBirth} onChange={(event) => changeEditField("dateOfBirth", event.target.value)} max={new Date().toISOString().slice(0, 10)} /></div></div>
+        <p className="field-note trainee-edit-note">عند تغيير رقم الهوية أو المعرّف، ستنتقل روابط الدورات والشهادات وحساب المتدرب تلقائيًا إلى السجل الجديد.</p>
+        {formError ? <p className="auth-error" role="alert">{formError}</p> : null}
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={closeEdit} disabled={saving}>إلغاء</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "جارٍ حفظ التعديلات..." : "حفظ التعديلات"}</button></div>
+      </form></section></div> : null}
+      </>
     );
   }
 
@@ -1095,7 +1165,7 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
         <main id="main-content" className="dashboard-content">
           {view === "overview" && <Overview onImport={() => setModal("import")} adminName={profile.name} data={databaseData} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "courses" && <CoursesView courses={courses} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
-          {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onMessage={showToast} />}
+          {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "companies" && <CompaniesView companies={companies} trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "users" && <UsersView currentUser={profile} />}
           {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={refreshDatabase} />}

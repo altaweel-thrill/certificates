@@ -18,6 +18,7 @@ export type DatabaseCourse = {
 export type DatabaseTrainee = {
   id: string;
   name: string;
+  nameAr: string;
   nameEn: string;
   nationalId: string;
   mobile: string;
@@ -25,6 +26,7 @@ export type DatabaseTrainee = {
   nationality: string;
   gender: string;
   dateOfBirth: string;
+  dateOfBirthValue: string;
   courses: string[];
   certificates: number;
   state: "مكتمل" | "لا توجد شهادات";
@@ -143,6 +145,15 @@ function formatDate(value: unknown) {
   }).format(date);
 }
 
+function formatDateInput(value: unknown) {
+  const date = dateValue(value);
+  if (!date) return "";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function formatCourseDate(startValue: unknown, endValue: unknown) {
   const start = dateValue(startValue);
   const end = dateValue(endValue);
@@ -244,6 +255,7 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
     return {
       id: trainee.id,
       name: text(trainee.nameAr) || text(trainee.nameEn) || "متدرب دون اسم",
+      nameAr: text(trainee.nameAr),
       nameEn: text(trainee.nameEn),
       nationalId: text(trainee.nationalId) || "غير متاح",
       mobile: text(trainee.mobile),
@@ -251,6 +263,7 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
       nationality: text(trainee.nationalityAr) || text(trainee.nationality) || "غير محددة",
       gender: text(trainee.gender) || "غير محدد",
       dateOfBirth: formatDate(trainee.dateOfBirth),
+      dateOfBirthValue: formatDateInput(trainee.dateOfBirth),
       courses: relatedCourseNames,
       certificates: certificateCount,
       state: certificateCount ? "مكتمل" : "لا توجد شهادات",

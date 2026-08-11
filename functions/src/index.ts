@@ -1,7 +1,8 @@
 import { initializeApp } from "firebase-admin/app";
 import { getAuth, UserRecord } from "firebase-admin/auth";
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { CallableRequest, HttpsError, onCall } from "firebase-functions/v2/https";
+import { createHash } from "node:crypto";
 
 initializeApp();
 
@@ -60,6 +61,18 @@ function requireText(value: unknown, label: string) {
     throw new HttpsError("invalid-argument", `${label} مطلوب.`);
   }
   return value.trim();
+}
+
+function optionalText(value: unknown, label: string, maxLength: number) {
+  if (value == null) return "";
+  if (typeof value !== "string") {
+    throw new HttpsError("invalid-argument", `${label} غير صالح.`);
+  }
+  const result = value.trim();
+  if (result.length > maxLength) {
+    throw new HttpsError("invalid-argument", `${label} أطول من الحد المسموح.`);
+  }
+  return result;
 }
 
 async function requireManageableTarget(caller: Caller, uid: string) {
@@ -382,6 +395,132 @@ function normalizeSaudiMobile(value: unknown) {
   if (/^9665\d{8}$/.test(valueDigits)) return `0${valueDigits.slice(3)}`;
   return "";
 }
+
+function parseDateOfBirth(value: unknown) {
+  const input = optionalText(value, "تاريخ الميلاد", 10);
+  if (!input) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input);
+  if (!match) throw new HttpsError("invalid-argument", "صيغة تاريخ الميلاد غير صحيحة.");
+  const date = new Date(`${input}T12:00:00.000Z`);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== Number(match[1]) ||
+    date.getUTCMonth() + 1 !== Number(match[2]) ||
+    date.getUTCDate() !== Number(match[3]) ||
+    date.getTime() > Date.now()
+  ) {
+    throw new HttpsError("invalid-argument", "تاريخ الميلاد غير صحيح.");
+  }
+  return Timestamp.fromDate(date);
+}
+
+export const updateTraineeDetails = onCall({ region: REGION }, async (request) => {
+  const caller = await requireAdmin(request);
+
+  try {
+    const data = request.data as Record<string, unknown>;
+    const currentDocumentId = requireText(data.traineeDocumentId, "معرف المتدرب");
+    const nameAr = optionalText(data.nameAr, "الاسم بالعربية", 250);
+    const nameEn = optionalText(data.nameEn, "الاسم بالإنجليزية", 250).replace(/^:\s*/, "");
+    const nationalId = optionalText(data.nationalId, "رقم الهوية أو المعرّف", 200);
+    const mobileInput = optionalText(data.mobile, "رقم الجوال", 30);
+    const mobile = mobileInput ? normalizeSaudiMobile(mobileInput) : "";
+    const traineeId = optionalText(data.traineeId, "رقم المتدرب", 100);
+    const nationality = optionalText(data.nationality, "الجنسية", 100);
+    const gender = optionalText(data.gender, "الجنس", 50);
+    const dateOfBirth = parseDateOfBirth(data.dateOfBirth);
+
+    if (!nameAr && !nameEn) {
+      throw new HttpsError("invalid-argument", "اسم المتدرب بالعربية أو الإنجليزية مطلوب.");
+    }
+    if (!nationalId) {
+      throw new HttpsError("invalid-argument", "رقم الهوية أو المعرّف مطلوب.");
+    }
+    if (mobileInput && !mobile) {
+      throw new HttpsError("invalid-argument", "رقم الجوال السعودي غير صحيح.");
+    }
+
+    const database = getFirestore();
+    const sourceReference = database.doc(`trainees/${currentDocumentId}`);
+    const sourceSnapshot = await sourceReference.get();
+    if (!sourceSnapshot.exists) {
+      throw new HttpsError("not-found", "سجل المتدرب غير موجود.");
+    }
+
+    const duplicateSnapshot = await database.collection("trainees")
+      .where("nationalId", "==", nationalId)
+      .limit(3)
+      .get();
+    if (duplicateSnapshot.docs.some((document) => document.id !== currentDocumentId)) {
+      throw new HttpsError("already-exists", "رقم الهوية أو المعرّف مستخدم لمتدرب آخر.");
+    }
+
+    const nextDocumentId = createHash("sha256").update(nationalId).digest("hex");
+    const update = {
+      nameAr,
+      nameEn,
+      nationalId,
+      mobile,
+      traineeId,
+      nationality,
+      nationalityAr: nationality,
+      gender,
+      dateOfBirth,
+      updatedBy: caller.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    const [linkedCertificates, linkedUsers] = await Promise.all([
+      database.collection("certificates").where("traineeDocumentId", "==", currentDocumentId).get(),
+      database.collection("users").where("traineeDocumentId", "==", currentDocumentId).get(),
+    ]);
+
+    if (nextDocumentId === currentDocumentId) {
+      const writer = database.bulkWriter();
+      writer.update(sourceReference, update);
+      linkedUsers.docs.forEach((document) => writer.set(document.ref, {
+        name: nameAr || nameEn,
+        nationalId,
+        phoneNumber: mobile,
+        updatedBy: caller.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true }));
+      await writer.close();
+      return { traineeDocumentId: currentDocumentId };
+    }
+
+    const targetReference = database.doc(`trainees/${nextDocumentId}`);
+    const targetSnapshot = await targetReference.get();
+    if (targetSnapshot.exists) {
+      throw new HttpsError("already-exists", "يوجد سجل آخر مرتبط برقم الهوية أو المعرّف الجديد.");
+    }
+
+    const writer = database.bulkWriter();
+    writer.set(targetReference, {
+      ...(sourceSnapshot.data() ?? {}),
+      ...update,
+      migratedFromDocumentId: currentDocumentId,
+    });
+    linkedCertificates.docs.forEach((document) => writer.update(document.ref, {
+      traineeDocumentId: nextDocumentId,
+      updatedBy: caller.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }));
+    linkedUsers.docs.forEach((document) => writer.set(document.ref, {
+      name: nameAr || nameEn,
+      nationalId,
+      phoneNumber: mobile,
+      traineeDocumentId: nextDocumentId,
+      updatedBy: caller.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }));
+    writer.delete(sourceReference);
+    await writer.close();
+
+    return { traineeDocumentId: nextDocumentId };
+  } catch (error) {
+    return throwAdminError(error);
+  }
+});
 
 export const activateTraineeSession = onCall({ region: REGION }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "يجب التحقق من رقم الجوال أولاً.");

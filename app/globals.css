@@ -191,6 +191,9 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
 .trainee-certificate-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; padding-top: 13px; border-top: 1px solid #e5eaf0; }
 .trainee-certificate-files .secondary-button { min-height: 38px; }
 .table-open-button { min-height: 38px; padding: 7px 13px; }
+.trainee-edit-modal { width: min(100%, 720px); }
+.trainee-edit-modal .field-grid { margin-bottom: 3px; }
+.trainee-edit-note { margin: 4px 0 0; padding: 11px 13px; border: 1px solid #dce4ec; border-radius: 10px; color: #536274; background: #f8fafc; line-height: 1.8; }
 .activity-panel { overflow: hidden; }
 .activity-list { padding: 4px 20px 12px; }
 .activity-item { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 13px 0; }
