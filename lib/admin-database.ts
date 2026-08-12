@@ -1,4 +1,5 @@
 import { getFirebaseAuth, getFirebaseFirestore } from "./firebase";
+import { refreshDashboardStats } from "./dashboard-stats";
 
 type RawDocument = Record<string, unknown> & { id: string };
 
@@ -95,6 +96,7 @@ export type AdminDatabaseData = {
   imports: DatabaseImport[];
   companies: DatabaseCompany[];
   metrics: {
+    totalCourses: number;
     activeCourses: number;
     totalTrainees: number;
     issuedCertificates: number;
@@ -176,6 +178,70 @@ function normalizeImportStatus(value: unknown): DatabaseImport["status"] {
   const status = text(value);
   if (status === "completed" || status === "failed") return status;
   return "processing";
+}
+
+function rawDocumentArray(value: unknown): RawDocument[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const data = object(item);
+    const id = text(data.id);
+    return id ? [{ id, ...data }] : [];
+  });
+}
+
+export async function loadAdminOverviewData(): Promise<AdminDatabaseData> {
+  const { doc, getDoc } = await import("firebase/firestore");
+  const auth = await getFirebaseAuth();
+  const database = await getFirebaseFirestore();
+
+  if (!auth.currentUser) throw new Error("يجب تسجيل الدخول كمسؤول لقراءة بيانات المنصة.");
+
+  const statsReference = doc(database, "dashboard", "stats");
+  let statsSnapshot = await getDoc(statsReference);
+  if (!statsSnapshot.exists()) {
+    await refreshDashboardStats();
+    statsSnapshot = await getDoc(statsReference);
+  }
+  if (!statsSnapshot.exists()) throw new Error("لم يتم إنشاء إحصائيات الصفحة الرئيسية بعد.");
+
+  const stats = statsSnapshot.data();
+  const courses = rawDocumentArray(stats.recentCourses).map<DatabaseCourse>((course) => ({
+    id: course.id,
+    code: [text(course.shortCourseCode), text(course.subCourseCode)].filter(Boolean).join("-") || course.id,
+    name: text(course.nameAr) || text(course.nameEn) || "دورة دون اسم",
+    nameEn: text(course.nameEn),
+    date: formatCourseDate(course.startingDate, course.endingDate),
+    hours: number(course.hours),
+    trainees: number(course.trainees),
+    completion: number(course.completion),
+    status: courseStatus(course.startingDate, course.endingDate),
+    updatedAt: timestamp(course.updatedAt),
+  }));
+  const imports = rawDocumentArray(stats.recentImports).map<DatabaseImport>((item) => ({
+    id: item.id,
+    fileName: text(item.sourceFileName) || "ملف Excel",
+    totalRows: number(item.totalRows),
+    completedRows: number(item.completedRows),
+    status: normalizeImportStatus(item.status),
+    importedByEmail: text(item.importedByEmail),
+    createdAt: timestamp(item.createdAt),
+  }));
+
+  return {
+    courses,
+    trainees: [],
+    certificates: [],
+    imports,
+    companies: [],
+    metrics: {
+      totalCourses: number(stats.totalCourses),
+      activeCourses: number(stats.activeCourses),
+      totalTrainees: number(stats.totalTrainees),
+      issuedCertificates: number(stats.issuedCertificates),
+      pendingCertificates: number(stats.pendingCertificates),
+    },
+    loadedAt: dateValue(stats.updatedAt) ?? new Date(),
+  };
 }
 
 export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
@@ -370,6 +436,7 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
     imports,
     companies,
     metrics: {
+      totalCourses: courses.length,
       activeCourses: courses.filter((course) => course.status === "نشطة").length,
       totalTrainees: trainees.length,
       issuedCertificates: certificates.length,

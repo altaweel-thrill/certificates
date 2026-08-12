@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ConfirmationResult } from "firebase/auth";
 import {
   type AdminProfile,
@@ -46,7 +46,9 @@ import {
   type DatabaseTrainee,
   getAdminDatabaseError,
   loadAdminDatabaseData,
+  loadAdminOverviewData,
 } from "../lib/admin-database";
+import { getDashboardStatsError, refreshDashboardStats } from "../lib/dashboard-stats";
 import {
   type PlatformSession,
   observePlatformSession,
@@ -305,7 +307,7 @@ function Overview({ onImport, adminName, data, loading, error, onRetry }: { onIm
         <div className="heading-actions"><button className="primary-button" type="button" onClick={onImport}>استيراد ملف Excel</button></div>
       </section>
       <section className="metrics-grid" aria-label="مؤشرات المنصة">
-        <MetricCard label="الدورات النشطة" value={loading ? "—" : String(metrics?.activeCourses ?? 0)} detail={`${data?.courses.length ?? 0} دورة مسجلة`} tone="slate" />
+        <MetricCard label="الدورات النشطة" value={loading ? "—" : String(metrics?.activeCourses ?? 0)} detail={`${metrics?.totalCourses ?? 0} دورة مسجلة`} tone="slate" />
         <MetricCard label="إجمالي المتدربين" value={loading ? "—" : String(metrics?.totalTrainees ?? 0)} detail="حسب سجلات المتدربين" tone="blue" />
         <MetricCard label="الشهادات الصادرة" value={loading ? "—" : String(metrics?.issuedCertificates ?? 0)} detail="حسب أرقام الشهادات المسجلة" tone="green" />
         <MetricCard label="بانتظار ملف PDF" value={loading ? "—" : String(metrics?.pendingCertificates ?? 0)} detail="تحتاج إلى رفع ملف الشهادة" tone="orange" />
@@ -894,7 +896,7 @@ function ActivityView({ imports, loading, error, onRetry }: { imports: DatabaseI
   return <section className="panel full-panel"><div className="panel-head"><div><h2>سجل النشاط</h2><p>عمليات الاستيراد المسجلة في قاعدة البيانات</p></div></div><DataMessage loading={loading} error={error} empty={!imports.length ? "لا توجد نشاطات مسجلة" : undefined} onRetry={onRetry} />{!loading && !error ? <div className="activity-list wide">{imports.map((item, index) => <div className="activity-item" key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.fileName}</strong><p>{item.completedRows} من {item.totalRows} سجلًا · {importStatusLabel(item.status)}</p><small>{formatDatabaseDate(item.createdAt)}</small></div></div>)}</div> : null}</section>;
 }
 
-function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "upload"; onClose: () => void; onSuccess: (message: string) => void; onDataChanged: () => void }) {
+function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "upload"; onClose: () => void; onSuccess: (message: string) => void | Promise<void>; onDataChanged: () => void | Promise<void> }) {
   const [file, setFile] = useState<File | null>(null);
   const [certificateFiles, setCertificateFiles] = useState<File[]>([]);
   const [importResult, setImportResult] = useState<CertificateImportResult | null>(null);
@@ -922,7 +924,7 @@ function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "
           file.name,
           (completed, total) => setSaveProgress({ completed, total }),
         );
-        onSuccess(`تم حفظ ${result.importedRows} سجلًا في Firestore بنجاح`);
+        await onSuccess(`تم حفظ ${result.importedRows} سجلًا في Firestore بنجاح`);
       } catch (error) {
         setImportError(getFirestoreImportError(error));
       } finally {
@@ -959,8 +961,8 @@ function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "
     }
 
     setSaving(false);
-    if (successfulUploads) onDataChanged();
     if (failures.length) {
+      if (successfulUploads) await onDataChanged();
       setCertificateFiles(failures.map((failure) => failure.file));
       const details = failures.slice(0, 3).map((failure) => `${failure.file.name}: ${failure.message}`).join(" | ");
       const duplicateDetails = duplicates.length ? ` وتم تخطي ${duplicates.length} ملف مكرر.` : "";
@@ -970,13 +972,13 @@ function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "
     if (duplicates.length) {
       setCertificateFiles([]);
       if (successfulUploads) {
-        onSuccess(`تم رفع ${successfulUploads} ملف جديد، وتخطي ${duplicates.length} ملف مرفوع مسبقًا`);
+        await onSuccess(`تم رفع ${successfulUploads} ملف جديد، وتخطي ${duplicates.length} ملف مرفوع مسبقًا`);
       } else {
         setImportError(`لم يتم رفع ملفات جديدة؛ تم تخطي ${duplicates.length} ملف لأنها مرفوعة مسبقًا.`);
       }
       return;
     }
-    onSuccess(`تم رفع وربط ${successfulUploads} ملف PDF بنجاح`);
+    await onSuccess(`تم رفع وربط ${successfulUploads} ملف PDF بنجاح`);
   };
 
   async function applySelectedFiles(selectedFiles: File[]) {
@@ -1102,48 +1104,55 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
   const [databaseData, setDatabaseData] = useState<AdminDatabaseData | null>(null);
   const [databaseLoading, setDatabaseLoading] = useState(true);
   const [databaseError, setDatabaseError] = useState("");
+  const [dataScope, setDataScope] = useState<"overview" | "full" | null>(null);
+  const databaseRequestActive = useRef(false);
   const title = navItems.find((item) => item.id === view)?.label ?? "نظرة عامة";
 
   const refreshDatabase = useCallback(async () => {
+    if (databaseRequestActive.current) return;
+    databaseRequestActive.current = true;
     setDatabaseLoading(true);
     setDatabaseError("");
     try {
-      setDatabaseData(await loadAdminDatabaseData());
+      const overviewOnly = view === "overview";
+      setDatabaseData(await (overviewOnly ? loadAdminOverviewData() : loadAdminDatabaseData()));
+      setDataScope(overviewOnly ? "overview" : "full");
     } catch (error) {
       setDatabaseError(getAdminDatabaseError(error));
     } finally {
+      databaseRequestActive.current = false;
       setDatabaseLoading(false);
     }
-  }, []);
+  }, [view]);
 
   useEffect(() => {
-    let active = true;
-
-    void loadAdminDatabaseData()
-      .then((result) => {
-        if (active) setDatabaseData(result);
-      })
-      .catch((error) => {
-        if (active) setDatabaseError(getAdminDatabaseError(error));
-      })
-      .finally(() => {
-        if (active) setDatabaseLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
+    const needsOverview = view === "overview" && dataScope === null;
+    const needsFullData = view !== "overview" && dataScope !== "full";
+    if (!needsOverview && !needsFullData) return;
+    const requestTimer = window.setTimeout(() => void refreshDatabase(), 0);
+    return () => window.clearTimeout(requestTimer);
+  }, [dataScope, refreshDatabase, view]);
 
   function showToast(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 3200);
   }
 
-  function success(message: string) {
+  async function syncAfterMutation() {
+    let statsError = "";
+    try {
+      await refreshDashboardStats();
+    } catch (error) {
+      statsError = getDashboardStatsError(error);
+    }
+    await refreshDatabase();
+    if (statsError) showToast(statsError);
+  }
+
+  async function success(message: string) {
     setModal(null);
     showToast(message);
-    void refreshDatabase();
+    await syncAfterMutation();
   }
 
   const courses = databaseData?.courses ?? [];
@@ -1168,13 +1177,13 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
           {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "companies" && <CompaniesView companies={companies} trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "users" && <UsersView currentUser={profile} />}
-          {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={refreshDatabase} />}
+          {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={syncAfterMutation} />}
           {view === "imports" && <ImportsView imports={imports} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onImport={() => setModal("import")} />}
           {view === "activity" && <ActivityView imports={imports} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "settings" && <SettingsView profile={profile} onSuccess={showToast} />}
         </main>
       </div>
-      {modal && <Modal type={modal} onClose={() => setModal(null)} onSuccess={success} onDataChanged={() => void refreshDatabase()} />}
+      {modal && <Modal type={modal} onClose={() => setModal(null)} onSuccess={success} onDataChanged={syncAfterMutation} />}
       <div className={`toast ${toast ? "show" : ""}`} role="status" aria-live="polite">{toast}</div>
     </div>
   );

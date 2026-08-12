@@ -414,6 +414,116 @@ function parseDateOfBirth(value: unknown) {
   return Timestamp.fromDate(date);
 }
 
+function timestampMillis(value: unknown) {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
+function courseStatus(startValue: unknown, endValue: unknown) {
+  const now = Date.now();
+  const start = timestampMillis(startValue);
+  const end = timestampMillis(endValue);
+  if (end && end < now) return "مكتملة";
+  if (start && start > now) return "مجدولة";
+  if (start || end) return "نشطة";
+  return "غير محددة";
+}
+
+async function rebuildDashboardStats(updatedBy: string) {
+  const database = getFirestore();
+  const certificates = database.collection("certificates");
+  const courses = database.collection("courses");
+  const trainees = database.collection("trainees");
+
+  const [
+    traineeCountSnapshot,
+    certificateCountSnapshot,
+    modernLocalFileCountSnapshot,
+    legacyLocalFileCountSnapshot,
+    courseSnapshot,
+    recentCourseSnapshot,
+    recentImportSnapshot,
+  ] = await Promise.all([
+    trainees.count().get(),
+    certificates.count().get(),
+    certificates.where("files.local.storagePath", ">", "").count().get(),
+    certificates.where("storagePath", ">", "").count().get(),
+    courses.select("startingDate", "endingDate").get(),
+    courses.orderBy("updatedAt", "desc").limit(4).get(),
+    database.collection("imports").orderBy("createdAt", "desc").limit(4).get(),
+  ]);
+
+  const totalCertificates = certificateCountSnapshot.data().count;
+  const localFiles = Math.min(
+    totalCertificates,
+    modernLocalFileCountSnapshot.data().count + legacyLocalFileCountSnapshot.data().count,
+  );
+
+  const recentCourses = await Promise.all(recentCourseSnapshot.docs.map(async (document) => {
+    const data = document.data();
+    const courseCertificateCount = await certificates
+      .where("courseDocumentId", "==", document.id)
+      .count()
+      .get();
+    const total = courseCertificateCount.data().count;
+    return {
+      id: document.id,
+      shortCourseCode: typeof data.shortCourseCode === "string" ? data.shortCourseCode : "",
+      subCourseCode: typeof data.subCourseCode === "string" ? data.subCourseCode : "",
+      nameAr: typeof data.nameAr === "string" ? data.nameAr : "",
+      nameEn: typeof data.nameEn === "string" ? data.nameEn : "",
+      hours: typeof data.hours === "number" ? data.hours : 0,
+      startingDate: data.startingDate ?? null,
+      endingDate: data.endingDate ?? null,
+      trainees: total,
+      completion: total ? 100 : 0,
+      updatedAt: data.updatedAt ?? null,
+    };
+  }));
+
+  const recentImports = recentImportSnapshot.docs.map((document) => {
+    const data = document.data();
+    return {
+      id: document.id,
+      sourceFileName: typeof data.sourceFileName === "string" ? data.sourceFileName : "",
+      totalRows: typeof data.totalRows === "number" ? data.totalRows : 0,
+      completedRows: typeof data.completedRows === "number" ? data.completedRows : 0,
+      status: typeof data.status === "string" ? data.status : "processing",
+      importedByEmail: typeof data.importedByEmail === "string" ? data.importedByEmail : "",
+      createdAt: data.createdAt ?? null,
+    };
+  });
+
+  const stats = {
+    totalCourses: courseSnapshot.size,
+    activeCourses: courseSnapshot.docs.filter((document) => {
+      const data = document.data();
+      return courseStatus(data.startingDate, data.endingDate) === "نشطة";
+    }).length,
+    totalTrainees: traineeCountSnapshot.data().count,
+    issuedCertificates: totalCertificates,
+    pendingCertificates: Math.max(0, totalCertificates - localFiles),
+    recentCourses,
+    recentImports,
+    updatedBy,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await database.doc("dashboard/stats").set(stats, { merge: true });
+  return stats;
+}
+
+export const refreshDashboardStats = onCall({ region: REGION }, async (request) => {
+  const caller = await requireAdmin(request);
+  try {
+    await rebuildDashboardStats(caller.uid);
+    return { success: true as const };
+  } catch (error) {
+    return throwAdminError(error);
+  }
+});
+
 export const updateTraineeDetails = onCall({ region: REGION }, async (request) => {
   const caller = await requireAdmin(request);
 
