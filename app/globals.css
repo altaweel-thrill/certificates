@@ -216,13 +216,6 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
 .search-field { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 11px; border: 1px solid #d4dce4; border-radius: 9px; background: white; }
 .search-field span { color: var(--muted); font-size: 12px; }
 .search-field input { width: 230px; min-height: 40px; margin: 0; padding: 7px 2px; border: 0; box-shadow: none; font-size: 14px; }
-.trainee-directory-search { display: flex; align-items: center; gap: 8px; }
-.trainee-directory-search .primary-button, .trainee-directory-search .secondary-button { min-height: 42px; padding: 8px 14px; }
-.trainee-pagination { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 20px; border-top: 1px solid #e8edf1; background: #fbfcfd; }
-.trainee-pagination p { margin: 0; color: var(--muted); font-size: 13px; }
-.trainee-pagination p strong { color: var(--ink-strong); }
-.trainee-pagination > div { display: flex; gap: 8px; }
-.trainee-pagination button { min-width: 88px; }
 .empty-state { padding: 60px 20px; text-align: center; }.empty-state strong { font-size: 16px; }.empty-state p { color: var(--muted); font-size: 13px; }
 .data-message-panel { margin-bottom: 17px; }
 .data-message-panel .empty-state { padding: 20px; }
@@ -430,12 +423,6 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
   .activity-list { display: block; }
   .stacked-mobile { align-items: stretch; flex-direction: column; }
   .search-field input { width: 100%; }
-  .trainee-directory-search { align-items: stretch; flex-wrap: wrap; }
-  .trainee-directory-search .search-field { width: 100%; }
-  .trainee-directory-search > button { flex: 1; }
-  .trainee-pagination { align-items: stretch; flex-direction: column; }
-  .trainee-pagination > div { width: 100%; }
-  .trainee-pagination button { flex: 1; }
   .document-list article { grid-template-columns: 38px 1fr auto; }.document-list article > .status-badge { display: none; }.document-list article > .secondary-button, .document-actions { grid-column: 2 / 4; }
   .document-actions button { flex: 1; }
   .file-preview { grid-template-columns: 1fr 1fr; }

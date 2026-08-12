@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ConfirmationResult } from "firebase/auth";
 import {
   type AdminProfile,
@@ -64,7 +64,6 @@ import {
   type TraineePortalData,
 } from "../lib/trainee-portal";
 import { getTraineeAdminError, updateTraineeDetails, type UpdateTraineeInput } from "../lib/trainee-admin";
-import { getTraineeDirectoryError, loadTraineeDirectoryPage } from "../lib/trainee-directory";
 import { signInCompany, getCompanyAuthError } from "../lib/company-auth";
 import { CompaniesView } from "./companies-view";
 import { CompanyDashboard } from "./company-dashboard";
@@ -345,18 +344,16 @@ function CoursesView({ courses, loading, error, onRetry }: { courses: DatabaseCo
   );
 }
 
-function TraineesView({ onMessage }: {
+function TraineesView({ trainees, certificates, loading, error, onRetry, onChanged, onMessage }: {
+  trainees: DatabaseTrainee[];
+  certificates: DatabaseCertificate[];
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  onChanged: () => void | Promise<void>;
   onMessage: (message: string) => void;
 }) {
-  const [trainees, setTrainees] = useState<DatabaseTrainee[]>([]);
-  const [certificates, setCertificates] = useState<DatabaseCertificate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [activeSearch, setActiveSearch] = useState("");
-  const [cursorHistory, setCursorHistory] = useState<string[]>([""]);
-  const [nextCursor, setNextCursor] = useState("");
-  const [hasNext, setHasNext] = useState(false);
   const [selectedTraineeId, setSelectedTraineeId] = useState("");
   const [downloadingKey, setDownloadingKey] = useState("");
   const [showEdit, setShowEdit] = useState(false);
@@ -372,82 +369,14 @@ function TraineesView({ onMessage }: {
     gender: "",
     dateOfBirth: "",
   });
-  const requestSequence = useRef(0);
-  const currentCursor = cursorHistory.at(-1) ?? "";
-  const pageNumber = cursorHistory.length;
+  const deferredSearch = useDeferredValue(search);
+  const filtered = useMemo(() => trainees.filter((trainee) => `${trainee.name} ${trainee.nameEn} ${trainee.nationalId} ${trainee.mobile} ${trainee.courses.join(" ")}`.toLocaleLowerCase().includes(deferredSearch.trim().toLocaleLowerCase())), [deferredSearch, trainees]);
   const selectedTrainee = trainees.find((trainee) => trainee.id === selectedTraineeId) ?? null;
   const selectedCertificates = useMemo(
     () => certificates.filter((certificate) => certificate.traineeDocumentId === selectedTraineeId),
     [certificates, selectedTraineeId],
   );
   const availableFiles = selectedCertificates.reduce((total, certificate) => total + certificate.files.length, 0);
-
-  const loadDirectory = useCallback(async (nationalId: string, cursor: string) => {
-    const requestId = requestSequence.current + 1;
-    requestSequence.current = requestId;
-    setLoading(true);
-    setError("");
-    try {
-      const result = await loadTraineeDirectoryPage({ nationalId, cursor });
-      if (requestSequence.current !== requestId) return;
-      setTrainees(result.trainees);
-      setCertificates(result.certificates);
-      setNextCursor(result.nextCursor);
-      setHasNext(result.hasNext);
-    } catch (requestError) {
-      if (requestSequence.current !== requestId) return;
-      setError(getTraineeDirectoryError(requestError));
-      setTrainees([]);
-      setCertificates([]);
-      setNextCursor("");
-      setHasNext(false);
-    } finally {
-      if (requestSequence.current === requestId) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const requestTimer = window.setTimeout(() => void loadDirectory("", ""), 0);
-    return () => window.clearTimeout(requestTimer);
-  }, [loadDirectory]);
-
-  async function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextSearch = search.trim();
-    setActiveSearch(nextSearch);
-    setCursorHistory([""]);
-    setSelectedTraineeId("");
-    await loadDirectory(nextSearch, "");
-  }
-
-  async function clearSearch() {
-    setSearch("");
-    setActiveSearch("");
-    setCursorHistory([""]);
-    setSelectedTraineeId("");
-    await loadDirectory("", "");
-  }
-
-  async function nextPage() {
-    if (!hasNext || !nextCursor || loading) return;
-    const nextHistory = [...cursorHistory, nextCursor];
-    setCursorHistory(nextHistory);
-    setSelectedTraineeId("");
-    await loadDirectory("", nextCursor);
-  }
-
-  async function previousPage() {
-    if (cursorHistory.length <= 1 || loading) return;
-    const previousHistory = cursorHistory.slice(0, -1);
-    const previousCursor = previousHistory.at(-1) ?? "";
-    setCursorHistory(previousHistory);
-    setSelectedTraineeId("");
-    await loadDirectory("", previousCursor);
-  }
-
-  function refreshDirectory() {
-    return loadDirectory(activeSearch, currentCursor);
-  }
 
   function openEdit() {
     if (!selectedTrainee) return;
@@ -483,11 +412,7 @@ function TraineesView({ onMessage }: {
     try {
       const result = await updateTraineeDetails({ traineeDocumentId: selectedTrainee.id, ...editForm });
       setShowEdit(false);
-      const updatedNationalId = editForm.nationalId.trim();
-      setSearch(updatedNationalId);
-      setActiveSearch(updatedNationalId);
-      setCursorHistory([""]);
-      await loadDirectory(updatedNationalId, "");
+      await onChanged();
       setSelectedTraineeId(result.traineeDocumentId);
       onMessage("تم تحديث بيانات المتدرب");
     } catch (requestError) {
@@ -517,7 +442,7 @@ function TraineesView({ onMessage }: {
       <section className="company-detail-page trainee-detail-page">
         <div className="company-detail-toolbar">
           <button type="button" className="text-button company-back-button" onClick={() => setSelectedTraineeId("")}>العودة إلى المتدربين</button>
-          <div className="heading-actions"><button type="button" className="secondary-button" onClick={() => void refreshDirectory()} disabled={loading}>{loading ? "جارٍ التحديث..." : "تحديث البيانات"}</button><button type="button" className="primary-button" onClick={openEdit}>تعديل بيانات المتدرب</button></div>
+          <div className="heading-actions"><button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>{loading ? "جارٍ التحديث..." : "تحديث البيانات"}</button><button type="button" className="primary-button" onClick={openEdit}>تعديل بيانات المتدرب</button></div>
         </div>
 
         <header className="company-detail-hero trainee-detail-hero">
@@ -580,12 +505,12 @@ function TraineesView({ onMessage }: {
 
   return (
     <section className="panel full-panel">
-      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>{activeSearch ? `نتيجة البحث عن رقم الهوية: ${activeSearch}` : `عرض 50 متدربًا في الصفحة · الصفحة ${pageNumber}`}</p></div><form className="trainee-directory-search" role="search" onSubmit={submitSearch}><label className="search-field" htmlFor="trainee-search"><span>رقم الهوية</span><input id="trainee-search" inputMode="search" dir="ltr" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="أدخل رقم الهوية كاملًا" /></label><button type="submit" className="primary-button" disabled={loading}>بحث</button>{activeSearch ? <button type="button" className="secondary-button" onClick={() => void clearSearch()} disabled={loading}>مسح البحث</button> : null}</form></div>
-      <DataMessage loading={loading} error={error} empty={!trainees.length ? activeSearch ? "لا يوجد متدرب مطابق لرقم الهوية" : "لا يوجد متدربون مسجلون" : undefined} onRetry={() => void refreshDirectory()} />
+      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>جميع المتدربين المسجلين · اضغط على الاسم لعرض التفاصيل</p></div><label className="search-field" htmlFor="trainee-search"><span>بحث</span><input id="trainee-search" inputMode="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="اكتب الاسم أو رقم الهوية..." /></label></div>
+      <DataMessage loading={loading} error={error} empty={!trainees.length ? "لا يوجد متدربون مسجلون" : undefined} onRetry={onRetry} />
       {!loading && !error && trainees.length ? <div className="table-scroll">
-        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>{trainees.map((trainee) => <tr key={trainee.id}><td><button type="button" className="company-name-button trainee-name-button" onClick={() => setSelectedTraineeId(trainee.id)}><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn || "عرض صفحة المتدرب"}</small></button></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td><td><button type="button" className="secondary-button table-open-button" onClick={() => setSelectedTraineeId(trainee.id)}>فتح</button></td></tr>)}</tbody></table>
+        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>{filtered.map((trainee) => <tr key={trainee.id}><td><button type="button" className="company-name-button trainee-name-button" onClick={() => setSelectedTraineeId(trainee.id)}><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn || "عرض صفحة المتدرب"}</small></button></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td><td><button type="button" className="secondary-button table-open-button" onClick={() => setSelectedTraineeId(trainee.id)}>فتح</button></td></tr>)}</tbody></table>
       </div> : null}
-      {!loading && !error && trainees.length > 0 && !activeSearch ? <nav className="trainee-pagination" aria-label="صفحات المتدربين"><p>الصفحة <strong>{pageNumber}</strong> · يظهر {trainees.length} سجلًا</p><div><button type="button" className="secondary-button" onClick={() => void previousPage()} disabled={pageNumber === 1 || loading}>السابق</button><button type="button" className="primary-button" onClick={() => void nextPage()} disabled={!hasNext || loading}>التالي</button></div></nav> : null}
+      {!loading && !error && trainees.length > 0 && !filtered.length ? <div className="empty-state"><strong>لا توجد نتائج مطابقة</strong><p>جرّب البحث بجزء من الاسم أو رقم الهوية.</p></div> : null}
     </section>
   );
 }
@@ -1184,7 +1109,6 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
   const title = navItems.find((item) => item.id === view)?.label ?? "نظرة عامة";
 
   const refreshDatabase = useCallback(async () => {
-    if (view === "trainees") return;
     if (databaseRequestActive.current) return;
     databaseRequestActive.current = true;
     setDatabaseLoading(true);
@@ -1203,7 +1127,7 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
 
   useEffect(() => {
     const needsOverview = view === "overview" && dataScope === null;
-    const needsFullData = view !== "overview" && view !== "trainees" && dataScope !== "full";
+    const needsFullData = view !== "overview" && dataScope !== "full";
     if (!needsOverview && !needsFullData) return;
     const requestTimer = window.setTimeout(() => void refreshDatabase(), 0);
     return () => window.clearTimeout(requestTimer);
@@ -1246,11 +1170,11 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
       <a className="skip-link" href="#main-content">تجاوز إلى المحتوى</a>
       <AdminSidebar active={view} setActive={setView} onLogout={onLogout} profile={profile} />
       <div className="app-main">
-        <header className="topbar"><div><span>مركز إدارة الشهادات</span><strong>{title}</strong></div><div>{view === "trainees" ? <span className="sync-status"><i /> تحميل اقتصادي: 50 سجلًا</span> : <button type="button" className="sync-status sync-button" onClick={() => void refreshDatabase()} disabled={databaseLoading}><i /> {databaseLoading ? "جارٍ المزامنة..." : `آخر مزامنة: ${syncTime}`}</button>}<span className="date-label">{currentDate}</span></div></header>
+        <header className="topbar"><div><span>مركز إدارة الشهادات</span><strong>{title}</strong></div><div><button type="button" className="sync-status sync-button" onClick={() => void refreshDatabase()} disabled={databaseLoading}><i /> {databaseLoading ? "جارٍ المزامنة..." : `آخر مزامنة: ${syncTime}`}</button><span className="date-label">{currentDate}</span></div></header>
         <main id="main-content" className="dashboard-content">
           {view === "overview" && <Overview onImport={() => setModal("import")} adminName={profile.name} data={databaseData} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "courses" && <CoursesView courses={courses} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
-          {view === "trainees" && <TraineesView onMessage={showToast} />}
+          {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "companies" && <CompaniesView companies={companies} trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "users" && <UsersView currentUser={profile} />}
           {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={syncAfterMutation} />}
