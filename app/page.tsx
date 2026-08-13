@@ -776,6 +776,30 @@ async function downloadCertificateFile(certificate: Pick<DatabaseCertificate, "n
 function CertificatesView({ certificates, loading, error, onRetry, onUpload, onMessage, onDataChanged }: { certificates: DatabaseCertificate[]; loading: boolean; error: string; onRetry: () => void; onUpload: () => void; onMessage: (message: string) => void; onDataChanged: () => void | Promise<void> }) {
   const [downloadingKey, setDownloadingKey] = useState("");
   const [deletingKey, setDeletingKey] = useState("");
+  const [search, setSearch] = useState("");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
+  const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase("ar"));
+  const certificateRows = useMemo(() => certificates.flatMap((certificate) => certificate.files.length
+    ? certificate.files.map((file) => ({ certificate, file }))
+    : [{ certificate, file: null }]), [certificates]);
+  const filteredRows = useMemo(() => {
+    if (!deferredSearch) return certificateRows;
+    return certificateRows.filter(({ certificate, file }) => [
+      certificate.number,
+      certificate.owner,
+      certificate.ownerEn,
+      certificate.course,
+      certificate.issueDate,
+      file?.label ?? "",
+    ].some((value) => String(value ?? "").toLocaleLowerCase("ar").includes(deferredSearch)));
+  }, [certificateRows, deferredSearch]);
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const activePage = Math.min(currentPage, totalPages);
+  const firstVisibleIndex = filteredRows.length ? (activePage - 1) * pageSize : 0;
+  const visibleRows = filteredRows.slice(firstVisibleIndex, firstVisibleIndex + pageSize);
+  const visibleEnd = Math.min(firstVisibleIndex + pageSize, filteredRows.length);
+  const pageItems = useMemo(() => paginationItems(activePage, totalPages), [activePage, totalPages]);
 
   async function download(certificate: DatabaseCertificate, file: DatabaseCertificateFile) {
     const downloadKey = `${certificate.id}-${file.type}`;
@@ -811,15 +835,18 @@ function CertificatesView({ certificates, loading, error, onRetry, onUpload, onM
 
   return (
     <section className="panel full-panel">
-      <div className="panel-head"><div><h2>مستودع الشهادات</h2><p>ملفات PDF الخاصة المرتبطة بسجلات المتدربين</p></div><button type="button" className="primary-button" onClick={onUpload}>رفع شهادة PDF</button></div>
+      <div className="panel-head stacked-mobile"><div><h2>مستودع الشهادات</h2><p>ملفات PDF الخاصة المرتبطة بسجلات المتدربين</p></div><div className="company-directory-controls"><div className="directory-table-tools"><label className="page-size-field" htmlFor="certificate-page-size"><span>عرض</span><select id="certificate-page-size" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }}><option value={25}>25 سجلًا</option><option value={50}>50 سجلًا</option><option value={100}>100 سجل</option><option value={250}>250 سجلًا</option></select></label><label className="search-field" htmlFor="certificate-search"><span>بحث</span><input id="certificate-search" inputMode="search" value={search} onChange={(event) => { setSearch(event.target.value); setCurrentPage(1); }} placeholder="رقم الشهادة أو المتدرب أو الدورة..." /></label></div><button type="button" className="primary-button" onClick={onUpload}>رفع شهادة PDF</button></div></div>
       <DataMessage loading={loading} error={error} empty={!certificates.length ? "لا توجد شهادات مسجلة" : undefined} onRetry={onRetry} />
-      {!loading && !error ? <div className="document-list">{certificates.flatMap((certificate) => certificate.files.length ? certificate.files.map((file) => {
+      {!loading && !error && certificates.length && !filteredRows.length ? <div className="empty-state"><strong>لا توجد نتائج مطابقة</strong><p>جرّب البحث برقم الشهادة أو اسم المتدرب أو اسم الدورة.</p></div> : null}
+      {!loading && !error && visibleRows.length ? <div className="document-list">{visibleRows.map(({ certificate, file }) => {
+        if (!file) return <article key={`${certificate.id}-empty`}><span className="pdf-mark">PDF</span><div><strong>الشهادة المحلية · رقم {certificate.number}</strong><p>{certificate.owner} · {certificate.course} · {certificate.issueDate}</p></div><StatusBadge status="بانتظار ملف PDF" /><button type="button" className="secondary-button" disabled>لا يوجد ملف</button></article>;
         const downloadKey = `${certificate.id}-${file.type}`;
         const isDownloading = downloadingKey === downloadKey;
         const isDeleting = deletingKey === downloadKey;
         const working = Boolean(downloadingKey || deletingKey);
         return <article key={downloadKey}><span className="pdf-mark">PDF</span><div><strong>{file.label} · رقم {certificate.number}</strong><p>{certificate.owner} · {certificate.course} · {certificate.issueDate}</p></div><StatusBadge status="متاحة للتنزيل" /><div className="document-actions"><button type="button" className="secondary-button" onClick={() => void download(certificate, file)} disabled={working}>{isDownloading ? "جارٍ التنزيل..." : "تنزيل"}</button><button type="button" className="danger-button" onClick={() => void removeFile(certificate, file)} disabled={working}>{isDeleting ? "جارٍ الحذف..." : "حذف الملف"}</button></div></article>;
-      }) : [<article key={`${certificate.id}-empty`}><span className="pdf-mark">PDF</span><div><strong>الشهادة المحلية · رقم {certificate.number}</strong><p>{certificate.owner} · {certificate.course} · {certificate.issueDate}</p></div><StatusBadge status="بانتظار ملف PDF" /><button type="button" className="secondary-button" disabled>لا يوجد ملف</button></article>])}</div> : null}
+      })}</div> : null}
+      {!loading && !error && filteredRows.length > 0 ? <nav className="directory-pagination" aria-label="صفحات مستودع الشهادات"><p>عرض <strong>{firstVisibleIndex + 1}–{visibleEnd}</strong> من <strong>{filteredRows.length}</strong>{search.trim() ? ` نتيجة · من أصل ${certificateRows.length} سجلًا` : " سجلًا"}</p><div className="pagination-controls"><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.max(1, activePage - 1))} disabled={activePage === 1} aria-label="الصفحة السابقة">السابق</button><div className="pagination-pages">{pageItems.map((item) => typeof item === "number" ? <button type="button" key={item} className={item === activePage ? "active" : ""} aria-current={item === activePage ? "page" : undefined} aria-label={`الصفحة ${item}`} onClick={() => setCurrentPage(item)}>{item}</button> : <span key={item} aria-hidden="true">…</span>)}</div><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.min(totalPages, activePage + 1))} disabled={activePage === totalPages} aria-label="الصفحة التالية">التالي</button></div></nav> : null}
     </section>
   );
 }
