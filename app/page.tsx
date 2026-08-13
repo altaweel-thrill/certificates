@@ -277,6 +277,20 @@ function DataMessage({ loading, error, empty, onRetry }: { loading: boolean; err
   return null;
 }
 
+function paginationItems(currentPage: number, totalPages: number): Array<number | string> {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  const pages = [...new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])]
+    .filter((page) => page >= 1 && page <= totalPages)
+    .sort((a, b) => a - b);
+  const items: Array<number | string> = [];
+  pages.forEach((page, index) => {
+    const previous = pages[index - 1];
+    if (previous && page - previous > 1) items.push(`ellipsis-${previous}-${page}`);
+    items.push(page);
+  });
+  return items;
+}
+
 function importStatusLabel(status: DatabaseImport["status"]) {
   if (status === "completed") return "مكتمل";
   if (status === "failed") return "فشل";
@@ -354,6 +368,8 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onChang
   onMessage: (message: string) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedTraineeId, setSelectedTraineeId] = useState("");
   const [downloadingKey, setDownloadingKey] = useState("");
   const [showEdit, setShowEdit] = useState(false);
@@ -371,6 +387,12 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onChang
   });
   const deferredSearch = useDeferredValue(search);
   const filtered = useMemo(() => trainees.filter((trainee) => `${trainee.name} ${trainee.nameEn} ${trainee.nationalId} ${trainee.mobile} ${trainee.courses.join(" ")}`.toLocaleLowerCase().includes(deferredSearch.trim().toLocaleLowerCase())), [deferredSearch, trainees]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const activePage = Math.min(currentPage, totalPages);
+  const firstVisibleIndex = filtered.length ? (activePage - 1) * pageSize : 0;
+  const visibleTrainees = filtered.slice(firstVisibleIndex, firstVisibleIndex + pageSize);
+  const visibleEnd = Math.min(firstVisibleIndex + pageSize, filtered.length);
+  const pageItems = useMemo(() => paginationItems(activePage, totalPages), [activePage, totalPages]);
   const selectedTrainee = trainees.find((trainee) => trainee.id === selectedTraineeId) ?? null;
   const selectedCertificates = useMemo(
     () => certificates.filter((certificate) => certificate.traineeDocumentId === selectedTraineeId),
@@ -505,12 +527,13 @@ function TraineesView({ trainees, certificates, loading, error, onRetry, onChang
 
   return (
     <section className="panel full-panel">
-      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>جميع المتدربين المسجلين · اضغط على الاسم لعرض التفاصيل</p></div><label className="search-field" htmlFor="trainee-search"><span>بحث</span><input id="trainee-search" inputMode="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="اكتب الاسم أو رقم الهوية..." /></label></div>
+      <div className="panel-head stacked-mobile"><div><h2>سجل المتدربين</h2><p>تم تحميل جميع المتدربين · التنقل بين الصفحات لا يستهلك قراءات إضافية</p></div><div className="trainee-table-tools"><label className="page-size-field" htmlFor="trainee-page-size"><span>عرض</span><select id="trainee-page-size" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }}><option value={25}>25 سجلًا</option><option value={50}>50 سجلًا</option><option value={100}>100 سجل</option><option value={250}>250 سجلًا</option></select></label><label className="search-field" htmlFor="trainee-search"><span>بحث</span><input id="trainee-search" inputMode="search" value={search} onChange={(event) => { setSearch(event.target.value); setCurrentPage(1); }} placeholder="اكتب الاسم أو رقم الهوية..." /></label></div></div>
       <DataMessage loading={loading} error={error} empty={!trainees.length ? "لا يوجد متدربون مسجلون" : undefined} onRetry={onRetry} />
       {!loading && !error && trainees.length ? <div className="table-scroll">
-        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>{filtered.map((trainee) => <tr key={trainee.id}><td><button type="button" className="company-name-button trainee-name-button" onClick={() => setSelectedTraineeId(trainee.id)}><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn || "عرض صفحة المتدرب"}</small></button></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td><td><button type="button" className="secondary-button table-open-button" onClick={() => setSelectedTraineeId(trainee.id)}>فتح</button></td></tr>)}</tbody></table>
+        <table><thead><tr><th>المتدرب</th><th>رقم الهوية</th><th>رقم الجوال</th><th>الدورات</th><th>الشهادات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>{visibleTrainees.map((trainee) => <tr key={trainee.id}><td><button type="button" className="company-name-button trainee-name-button" onClick={() => setSelectedTraineeId(trainee.id)}><strong>{trainee.name}</strong><small dir="ltr">{trainee.nameEn || "عرض صفحة المتدرب"}</small></button></td><td dir="ltr">{trainee.nationalId}</td><td dir="ltr">{trainee.mobile || "—"}</td><td>{trainee.courses.join("، ") || "—"}</td><td>{trainee.certificates}</td><td><StatusBadge status={trainee.state} /></td><td><button type="button" className="secondary-button table-open-button" onClick={() => setSelectedTraineeId(trainee.id)}>فتح</button></td></tr>)}</tbody></table>
       </div> : null}
       {!loading && !error && trainees.length > 0 && !filtered.length ? <div className="empty-state"><strong>لا توجد نتائج مطابقة</strong><p>جرّب البحث بجزء من الاسم أو رقم الهوية.</p></div> : null}
+      {!loading && !error && filtered.length > 0 ? <nav className="trainee-pagination" aria-label="صفحات سجل المتدربين"><p>عرض <strong>{firstVisibleIndex + 1}–{visibleEnd}</strong> من <strong>{filtered.length}</strong>{search.trim() ? ` نتيجة · من أصل ${trainees.length} متدربًا` : " متدربًا"}</p><div className="pagination-controls"><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.max(1, activePage - 1))} disabled={activePage === 1} aria-label="الصفحة السابقة">السابق</button><div className="pagination-pages">{pageItems.map((item) => typeof item === "number" ? <button type="button" key={item} className={item === activePage ? "active" : ""} aria-current={item === activePage ? "page" : undefined} aria-label={`الصفحة ${item}`} onClick={() => setCurrentPage(item)}>{item}</button> : <span key={item} aria-hidden="true">…</span>)}</div><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.min(totalPages, activePage + 1))} disabled={activePage === totalPages} aria-label="الصفحة التالية">التالي</button></div></nav> : null}
     </section>
   );
 }
