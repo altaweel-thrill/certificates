@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useDeferredValue, useMemo, useState } from "react";
 import type { DatabaseCompany, DatabaseCompanyAccount, DatabaseTrainee } from "../lib/admin-database";
 import {
   createCompanyAccount,
@@ -16,6 +16,23 @@ type CompanyModal = "company" | "companyEdit" | "account" | "accountEdit" | null
 
 function Status({ disabled }: { disabled: boolean }) {
   return <span className={`status-badge ${disabled ? "neutral" : "success"}`}><i aria-hidden="true" />{disabled ? "معطّل" : "نشط"}</span>;
+}
+
+function companyPaginationItems(currentPage: number, totalPages: number): Array<number | string> {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+
+  const pages = [...new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])]
+    .filter((page) => page >= 1 && page <= totalPages)
+    .sort((first, second) => first - second);
+  const items: Array<number | string> = [];
+
+  pages.forEach((page, index) => {
+    const previous = pages[index - 1];
+    if (previous && page - previous > 1) items.push(`ellipsis-${previous}-${page}`);
+    items.push(page);
+  });
+
+  return items;
 }
 
 export function CompaniesView({ companies, trainees, loading, error, onRetry, onChanged, onMessage }: {
@@ -40,11 +57,33 @@ export function CompaniesView({ companies, trainees, loading, error, onRetry, on
   const [accountName, setAccountName] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
+  const [search, setSearch] = useState("");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const detailCompany = companies.find((company) => company.id === detailCompanyId) ?? null;
   const companyEmployees = useMemo(
     () => trainees.filter((trainee) => trainee.companyDocumentId === detailCompanyId),
     [detailCompanyId, trainees],
+  );
+  const deferredSearch = useDeferredValue(search);
+  const filteredCompanies = useMemo(() => {
+    const needle = deferredSearch.trim().toLocaleLowerCase();
+    if (!needle) return companies;
+
+    return companies.filter((company) => [company.name, company.crNumber, company.contactEmail, company.contactPhone]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle));
+  }, [companies, deferredSearch]);
+  const totalPages = Math.max(1, Math.ceil(filteredCompanies.length / pageSize));
+  const activePage = Math.min(currentPage, totalPages);
+  const firstVisibleIndex = filteredCompanies.length ? (activePage - 1) * pageSize : 0;
+  const visibleCompanies = filteredCompanies.slice(firstVisibleIndex, firstVisibleIndex + pageSize);
+  const visibleEnd = Math.min(firstVisibleIndex + pageSize, filteredCompanies.length);
+  const pageItems = useMemo(
+    () => companyPaginationItems(activePage, totalPages),
+    [activePage, totalPages],
   );
 
   function resetModal() {
@@ -153,11 +192,13 @@ export function CompaniesView({ companies, trainees, loading, error, onRetry, on
 
   return <>
     {!detailCompany ? <section className="panel full-panel companies-panel">
-      <div className="panel-head stacked-mobile"><div><h2>الشركات</h2><p>اضغط على اسم الشركة لعرض الموظفين والحسابات</p></div><div className="heading-actions"><button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>تحديث</button><button type="button" className="primary-button" onClick={openNewCompany}>إضافة شركة</button></div></div>
+      <div className="panel-head stacked-mobile"><div><h2>الشركات</h2><p>جميع الشركات المسجلة في المنصة</p></div><div className="company-directory-controls"><div className="directory-table-tools"><label className="page-size-field" htmlFor="company-page-size"><span>عرض</span><select id="company-page-size" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }}><option value={25}>25 سجلًا</option><option value={50}>50 سجلًا</option><option value={100}>100 سجل</option><option value={250}>250 سجلًا</option></select></label><label className="search-field" htmlFor="company-search"><span>بحث</span><input id="company-search" inputMode="search" value={search} onChange={(event) => { setSearch(event.target.value); setCurrentPage(1); }} placeholder="اسم الشركة أو السجل التجاري..." /></label></div><div className="heading-actions"><button type="button" className="secondary-button" onClick={onRetry} disabled={loading}>تحديث</button><button type="button" className="primary-button" onClick={openNewCompany}>إضافة شركة</button></div></div></div>
       {error || formError ? <p className="auth-error users-error" role="alert">{formError || error}</p> : null}
       {loading ? <div className="empty-state"><strong>جارٍ تحميل الشركات...</strong></div> : null}
       {!loading && !companies.length ? <div className="empty-state"><strong>لا توجد شركات مسجلة</strong><p>أضف الشركة أو استورد ملف Excel يحتوي على رقم السجل التجاري في عمود CrNumber.</p></div> : null}
-      {!loading && companies.length ? <div className="table-scroll"><table><thead><tr><th>الشركة</th><th>السجل التجاري</th><th>الموظفون</th><th>الشهادات</th><th>الحسابات</th><th>الحالة</th><th>الإجراءات</th></tr></thead><tbody>{companies.map((company) => <tr key={company.id}><td><button type="button" className="company-name-button" onClick={() => setDetailCompanyId(company.id)}><strong>{company.name}</strong><small dir="ltr">{company.contactEmail || "عرض صفحة الشركة"}</small></button></td><td dir="ltr">{company.crNumber || "—"}</td><td>{company.employees}</td><td>{company.certificates}</td><td>{company.accounts}</td><td><Status disabled={company.status === "disabled"} /></td><td><div className="user-actions"><button type="button" className="secondary-button" onClick={() => setDetailCompanyId(company.id)}>فتح</button><button type="button" className={company.status === "disabled" ? "secondary-button" : "danger-button"} disabled={workingId === company.id} onClick={() => void toggleCompany(company)}>{workingId === company.id ? "جارٍ الحفظ..." : company.status === "disabled" ? "تفعيل" : "تعطيل"}</button></div></td></tr>)}</tbody></table></div> : null}
+      {!loading && companies.length > 0 && !filteredCompanies.length ? <div className="empty-state"><strong>لا توجد نتائج مطابقة</strong><p>جرّب البحث باسم الشركة أو السجل التجاري أو بيانات التواصل.</p></div> : null}
+      {!loading && visibleCompanies.length ? <div className="table-scroll"><table><thead><tr><th>الشركة</th><th>السجل التجاري</th><th>الموظفون</th><th>الشهادات</th><th>الحسابات</th><th>الحالة</th><th>الإجراءات</th></tr></thead><tbody>{visibleCompanies.map((company) => <tr key={company.id}><td><button type="button" className="company-name-button" onClick={() => setDetailCompanyId(company.id)}><strong>{company.name}</strong><small dir="ltr">{company.contactEmail || "عرض صفحة الشركة"}</small></button></td><td dir="ltr">{company.crNumber || "—"}</td><td>{company.employees}</td><td>{company.certificates}</td><td>{company.accounts}</td><td><Status disabled={company.status === "disabled"} /></td><td><div className="user-actions"><button type="button" className="secondary-button" onClick={() => setDetailCompanyId(company.id)}>فتح</button><button type="button" className={company.status === "disabled" ? "secondary-button" : "danger-button"} disabled={workingId === company.id} onClick={() => void toggleCompany(company)}>{workingId === company.id ? "جارٍ الحفظ..." : company.status === "disabled" ? "تفعيل" : "تعطيل"}</button></div></td></tr>)}</tbody></table></div> : null}
+      {!loading && filteredCompanies.length > 0 ? <nav className="directory-pagination" aria-label="صفحات سجل الشركات"><p>عرض <strong>{firstVisibleIndex + 1}–{visibleEnd}</strong> من <strong>{filteredCompanies.length}</strong>{search.trim() ? ` نتيجة · من أصل ${companies.length} شركة` : " شركة"}</p><div className="pagination-controls"><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.max(1, activePage - 1))} disabled={activePage === 1} aria-label="الصفحة السابقة">السابق</button><div className="pagination-pages">{pageItems.map((item) => typeof item === "number" ? <button type="button" key={item} className={item === activePage ? "active" : ""} aria-current={item === activePage ? "page" : undefined} aria-label={`الصفحة ${item}`} onClick={() => setCurrentPage(item)}>{item}</button> : <span key={item} aria-hidden="true">…</span>)}</div><button type="button" className="pagination-direction" onClick={() => setCurrentPage(Math.min(totalPages, activePage + 1))} disabled={activePage === totalPages} aria-label="الصفحة التالية">التالي</button></div></nav> : null}
     </section> : <section className="company-detail-page">
       <div className="company-detail-toolbar"><button type="button" className="text-button company-back-button" onClick={() => setDetailCompanyId("")}>العودة إلى الشركات</button><div className="heading-actions"><button type="button" className="secondary-button" onClick={() => openCompanyEdit(detailCompany)}>تعديل بيانات الشركة</button><button type="button" className="primary-button" onClick={openNewAccount}>إضافة حساب</button></div></div>
       <header className="company-detail-hero"><div><p className="eyebrow">صفحة الشركة</p><h1>{detailCompany.name}</h1><p>السجل التجاري: <span dir="ltr">{detailCompany.crNumber || "—"}</span></p></div><Status disabled={detailCompany.status === "disabled"} /></header>
