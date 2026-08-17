@@ -78,6 +78,8 @@ export async function loadCompanyPortal(profile: CompanyProfile): Promise<Compan
   const auth = await getFirebaseAuth();
   const database = await getFirebaseFirestore();
   if (!auth.currentUser || auth.currentUser.uid !== profile.uid) throw new Error("انتهت جلسة الشركة. سجّل الدخول مرة أخرى.");
+  // Refresh custom claims before Storage checks the company/certificate relationship.
+  await auth.currentUser.getIdToken(true);
 
   const [companySnapshot, traineeSnapshot, certificateSnapshot] = await Promise.all([
     getDoc(doc(database, "companies", profile.companyDocumentId)),

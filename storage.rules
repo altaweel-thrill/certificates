@@ -6,8 +6,17 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
     }
 
+    function tokenIsAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.role in ["admin", "super_admin"]
+      );
+    }
+
     function isAdmin() {
-      return request.auth != null && currentUser().data.role in ["admin", "super_admin"];
+      return tokenIsAdmin() || (
+        request.auth != null && currentUser().data.role in ["admin", "super_admin"]
+      );
     }
 
     function isTrainee() {
@@ -21,6 +30,13 @@ service firebase.storage {
         firestore.get(/databases/(default)/documents/companies/$(currentUser().data.companyDocumentId)).data.status != "disabled";
     }
 
+    function isCompanyFromToken() {
+      return request.auth != null &&
+        request.auth.token.role == "company_admin" &&
+        request.auth.token.companyDocumentId is string &&
+        firestore.get(/databases/(default)/documents/companies/$(request.auth.token.companyDocumentId)).data.status != "disabled";
+    }
+
     function ownsCertificate(certificateId) {
       return isTrainee() &&
         firestore.get(/databases/(default)/documents/certificates/$(certificateId)).data.traineeDocumentId ==
@@ -28,9 +44,15 @@ service firebase.storage {
     }
 
     function ownsCompanyCertificate(certificateId) {
-      return isCompany() &&
+      return (
+        isCompanyFromToken() &&
         firestore.get(/databases/(default)/documents/certificates/$(certificateId)).data.companyDocumentId ==
-          currentUser().data.companyDocumentId;
+          request.auth.token.companyDocumentId
+      ) || (
+        isCompany() &&
+        firestore.get(/databases/(default)/documents/certificates/$(certificateId)).data.companyDocumentId ==
+          currentUser().data.companyDocumentId
+      );
     }
 
     match /certificates/{certificateId}/{allPaths=**} {
