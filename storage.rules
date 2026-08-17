@@ -13,21 +13,22 @@ service firebase.storage {
       );
     }
 
+    function hasPlatformRoleClaim() {
+      return request.auth != null && "role" in request.auth.token;
+    }
+
     function isAdmin() {
       return tokenIsAdmin() || (
-        request.auth != null && currentUser().data.role in ["admin", "super_admin"]
+        request.auth != null &&
+        !hasPlatformRoleClaim() &&
+        currentUser().data.role in ["admin", "super_admin"]
       );
     }
 
     function isTrainee() {
-      return request.auth != null && currentUser().data.role == "trainee";
-    }
-
-    function isCompany() {
       return request.auth != null &&
-        currentUser().data.role == "company_admin" &&
-        currentUser().data.companyDocumentId is string &&
-        firestore.get(/databases/(default)/documents/companies/$(currentUser().data.companyDocumentId)).data.status != "disabled";
+        !hasPlatformRoleClaim() &&
+        currentUser().data.role == "trainee";
     }
 
     function isCompanyFromToken() {
@@ -44,15 +45,9 @@ service firebase.storage {
     }
 
     function ownsCompanyCertificate(certificateId) {
-      return (
-        isCompanyFromToken() &&
+      return isCompanyFromToken() &&
         firestore.get(/databases/(default)/documents/certificates/$(certificateId)).data.companyDocumentId ==
-          request.auth.token.companyDocumentId
-      ) || (
-        isCompany() &&
-        firestore.get(/databases/(default)/documents/certificates/$(certificateId)).data.companyDocumentId ==
-          currentUser().data.companyDocumentId
-      );
+          request.auth.token.companyDocumentId;
     }
 
     match /certificates/{certificateId}/{allPaths=**} {
