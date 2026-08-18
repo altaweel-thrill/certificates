@@ -524,6 +524,71 @@ export const refreshDashboardStats = onCall({ region: REGION }, async (request) 
   }
 });
 
+export const verifyCertificate = onCall({ region: REGION, maxInstances: 10, timeoutSeconds: 10 }, async (request) => {
+  const input = request.data as Record<string, unknown> | null;
+  const rawNumber = input?.certificateNumber;
+  const rawNationalId = input?.nationalId;
+  if (typeof rawNumber !== "string" || typeof rawNationalId !== "string") {
+    throw new HttpsError("invalid-argument", "رقم الشهادة ورقم الهوية مطلوبان.");
+  }
+
+  const certificateNumber = rawNumber.trim();
+  const nationalId = rawNationalId.trim();
+  if (!certificateNumber || certificateNumber.length > 180 || !nationalId || nationalId.length > 200) {
+    throw new HttpsError("invalid-argument", "رقم الشهادة أو رقم الهوية غير صحيح.");
+  }
+
+  try {
+    const database = getFirestore();
+    const matches = await database.collection("certificates")
+      .where("certificateNumber", "==", certificateNumber)
+      .limit(2)
+      .get();
+
+    if (matches.size !== 1) return { verified: false as const };
+
+    const certificate = matches.docs[0];
+    const certificateData = certificate.data();
+    const traineeDocumentId = typeof certificateData.traineeDocumentId === "string" ? certificateData.traineeDocumentId : "";
+    const courseDocumentId = typeof certificateData.courseDocumentId === "string" ? certificateData.courseDocumentId : "";
+    if (!traineeDocumentId) return { verified: false as const };
+
+    const traineeSnapshot = await database.doc(`trainees/${traineeDocumentId}`).get();
+    const trainee = traineeSnapshot?.data() ?? {};
+    const storedNationalId = typeof trainee.nationalId === "string" ? trainee.nationalId.trim() : "";
+    if (!traineeSnapshot.exists || !storedNationalId || storedNationalId !== nationalId) {
+      return { verified: false as const };
+    }
+
+    const courseSnapshot = courseDocumentId ? await database.doc(`courses/${courseDocumentId}`).get() : null;
+    const course = courseSnapshot?.data() ?? {};
+    const status = typeof certificateData.status === "string" ? certificateData.status : "imported";
+    const revoked = status === "revoked" || status === "cancelled";
+
+    return {
+      verified: true as const,
+      certificate: {
+        number: typeof certificateData.certificateNumber === "string" ? certificateData.certificateNumber : certificate.id,
+        traineeNameAr: typeof trainee.nameAr === "string" ? trainee.nameAr : "",
+        traineeNameEn: typeof trainee.nameEn === "string" ? trainee.nameEn.replace(/^:\s*/, "") : "",
+        courseNameAr: typeof course.nameAr === "string" ? course.nameAr : "",
+        courseNameEn: typeof course.nameEn === "string" ? course.nameEn : "",
+        courseCode: typeof course.shortCourseCode === "string"
+          ? course.shortCourseCode
+          : typeof course.subCourseCode === "string"
+            ? course.subCourseCode
+            : "",
+        issueDate: timestampMillis(certificateData.issueDate),
+        issueDateHijri: typeof certificateData.issueDateHijri === "string" ? certificateData.issueDateHijri : "",
+        status: revoked ? "revoked" as const : "valid" as const,
+      },
+    };
+  } catch (error) {
+    console.error("Certificate verification failed", error);
+    throw new HttpsError("internal", "تعذر التحقق من الشهادة حالياً.");
+  }
+});
+
 export const updateTraineeDetails = onCall({ region: REGION }, async (request) => {
   const caller = await requireAdmin(request);
 

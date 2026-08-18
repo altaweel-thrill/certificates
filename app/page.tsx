@@ -222,7 +222,13 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
               : "يجب أن يطابق رقم الهوية والجوال البيانات المسجلة في قواعد بيانات المعهد."}
           </p>
         </div>
-        <p className="login-footer">الدعم الفني · سياسة الخصوصية · الإصدار 0.1</p>
+        <footer className="login-footer">
+          <p>الدعم الفني · سياسة الخصوصية · الإصدار 1</p>
+          <a className="login-verification-link" href="/verify">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.5 12 3 3 6-7M12 2.8l2.1 1.3 2.5-.1 1.1 2.2 2.2 1.1-.1 2.5 1.3 2.1-1.3 2.1.1 2.5-2.2 1.1-1.1 2.2-2.5-.1L12 21.2l-2.1-1.3-2.5.1-1.1-2.2-2.2-1.1.1-2.5L2.9 12l1.3-2.1-.1-2.5 2.2-1.1 1.1-2.2 2.5.1L12 2.8Z" /></svg>
+            التحقق من صحة شهادة
+          </a>
+        </footer>
       </section>
     </main>
   );
