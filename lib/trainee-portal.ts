@@ -97,7 +97,7 @@ export async function sendTraineeVerificationCode(mobile: string): Promise<Confi
     throw cooldownError;
   }
 
-  const { RecaptchaVerifier, signInWithPhoneNumber } = await import("firebase/auth");
+  const { RecaptchaVerifier, initializeRecaptchaConfig, signInWithPhoneNumber } = await import("firebase/auth");
   const auth = await getFirebaseAuth();
   auth.languageCode = "ar";
   const isLocalDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
@@ -105,14 +105,21 @@ export async function sendTraineeVerificationCode(mobile: string): Promise<Confi
   const container = document.getElementById("trainee-recaptcha");
   if (!container) throw new Error("تعذر تهيئة التحقق الأمني. حدّث الصفحة وحاول مرة أخرى.");
 
-  if (recaptchaVerifier && recaptchaContainer !== container) destroyTraineeRecaptcha();
-  if (!recaptchaVerifier) {
-    recaptchaContainer = container;
-    recaptchaVerifier = new RecaptchaVerifier(auth, container, { size: isLocalDevelopment ? "invisible" : "normal" });
-    await recaptchaVerifier.render();
-  }
+  destroyTraineeRecaptcha();
+  await initializeRecaptchaConfig(auth);
+  recaptchaContainer = container;
+  recaptchaVerifier = new RecaptchaVerifier(auth, container, {
+    size: isLocalDevelopment ? "invisible" : "normal",
+    "expired-callback": () => destroyTraineeRecaptcha(),
+  });
+  await recaptchaVerifier.render();
   window.sessionStorage.setItem(SMS_REQUEST_TIMESTAMP_KEY, String(Date.now()));
-  return signInWithPhoneNumber(auth, internationalMobile, recaptchaVerifier);
+  try {
+    return await signInWithPhoneNumber(auth, internationalMobile, recaptchaVerifier);
+  } catch (error) {
+    destroyTraineeRecaptcha();
+    throw error;
+  }
 }
 
 export function resetTraineeRecaptcha() {
