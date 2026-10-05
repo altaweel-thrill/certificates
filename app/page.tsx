@@ -43,8 +43,10 @@ import {
   type DatabaseCertificateFile,
   type DatabaseCourse,
   type DatabaseImport,
+  type DatabaseActivityCursor,
   type DatabaseTrainee,
   getAdminDatabaseError,
+  loadAdminActivityPage,
   loadAdminDatabaseData,
   loadAdminOverviewData,
 } from "../lib/admin-database";
@@ -59,7 +61,7 @@ import {
   destroyTraineeRecaptcha,
   getTraineeAuthError,
   loadTraineePortal,
-  resetTraineeRecaptcha,
+  prepareTraineeRecaptcha,
   sendTraineeVerificationCode,
   type TraineePortalData,
 } from "../lib/trainee-portal";
@@ -98,8 +100,38 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [captchaVerified, setCaptchaVerified] = useState(false);
 
-  useEffect(() => () => destroyTraineeRecaptcha(), []);
+  const prepareCaptcha = useCallback(async () => {
+    setCaptchaLoading(true);
+    setCaptchaVerified(false);
+    try {
+      await prepareTraineeRecaptcha(
+        () => setCaptchaVerified(true),
+        () => setCaptchaVerified(false),
+      );
+    } catch (captchaError) {
+      setError(getTraineeAuthError(captchaError));
+    } finally {
+      setCaptchaLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const initializationTimer = window.setTimeout(() => {
+      if (role === "trainee" && !confirmation) {
+        void prepareCaptcha();
+      } else {
+        destroyTraineeRecaptcha();
+        setCaptchaVerified(false);
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(initializationTimer);
+      destroyTraineeRecaptcha();
+    };
+  }, [confirmation, prepareCaptcha, role]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -122,12 +154,14 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
       }
     } catch (authError) {
       setError(role === "admin" ? getAdminAuthError(authError) : role === "company" ? getCompanyAuthError(authError) : getTraineeAuthError(authError));
-      if (role === "trainee" && !confirmation) resetTraineeRecaptcha();
+      if (role === "trainee" && !confirmation) {
+        setCaptchaVerified(false);
+        void prepareCaptcha();
+      }
       const errorCode = typeof authError === "object" && authError && "code" in authError ? String(authError.code) : "";
       if (confirmation && (errorCode.includes("permission-denied") || errorCode.includes("not-found"))) {
         setConfirmation(null);
         setVerificationCode("");
-        resetTraineeRecaptcha();
       }
     } finally {
       setLoading(false);
@@ -141,14 +175,14 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
     setVerificationCode("");
     setConfirmation(null);
     setEmail(nextRole === "admin" ? "admin@itti.edu.sa" : "");
-    resetTraineeRecaptcha();
+    setCaptchaVerified(false);
   }
 
   function editTraineeDetails() {
     setConfirmation(null);
     setVerificationCode("");
     setError("");
-    resetTraineeRecaptcha();
+    setCaptchaVerified(false);
   }
 
   return (
@@ -201,6 +235,14 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
                   <label htmlFor="mobile">رقم الجوال المسجل</label>
                   <input id="mobile" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="05xxxxxxxx" required />
                   <p className="field-note">سيصل رمز SMS إلى الجوال المسجل. باستخدام الخدمة توافق على إرسال رقم الجوال للتحقق.</p>
+                  <div className={`captcha-step ${captchaVerified ? "verified" : ""}`}>
+                    <div className="captcha-step-heading">
+                      <strong>التحقق الأمني</strong>
+                      <span aria-live="polite">{captchaLoading ? "جارٍ التحميل..." : captchaVerified ? "تم التحقق" : "مطلوب قبل الإرسال"}</span>
+                    </div>
+                    <div id="trainee-recaptcha" />
+                    {!captchaLoading && !captchaVerified ? <p>أكمل مربع التحقق لتفعيل زر إرسال رمز SMS.</p> : null}
+                  </div>
                 </>
             ) : (
               <>
@@ -211,8 +253,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
               </>
             )}
             {error ? <p className="auth-error" role="alert">{error}</p> : null}
-            <button className="primary-button full" type="submit" disabled={loading}>{loading ? "جارٍ التحقق..." : role === "trainee" ? confirmation ? "تأكيد الرمز والدخول" : "إرسال رمز التحقق" : role === "company" ? "دخول بوابة الشركة" : "دخول لوحة الإدارة"}</button>
-            <div id="trainee-recaptcha" />
+            <button className="primary-button full" type="submit" disabled={loading || (role === "trainee" && !confirmation && !captchaVerified)}>{loading ? "جارٍ التحقق..." : role === "trainee" ? confirmation ? "تأكيد الرمز والدخول" : captchaVerified ? "إرسال رمز التحقق" : "أكمل التحقق الأمني أولًا" : role === "company" ? "دخول بوابة الشركة" : "دخول لوحة الإدارة"}</button>
           </form>
           <p className="demo-help">
             {role === "admin"
@@ -303,6 +344,10 @@ function importStatusLabel(status: DatabaseImport["status"]) {
   return "قيد المعالجة";
 }
 
+function importActorLabel(item: DatabaseImport) {
+  return item.importedByName || item.importedByEmail || "اسم المنفّذ غير متاح";
+}
+
 function formatDatabaseDate(timestamp: number) {
   if (!timestamp) return "الوقت غير متاح";
   return new Intl.DateTimeFormat("ar-SA", {
@@ -314,7 +359,7 @@ function formatDatabaseDate(timestamp: number) {
   }).format(new Date(timestamp));
 }
 
-function Overview({ onImport, adminName, data, loading, error, onRetry }: { onImport: () => void; adminName: string; data: AdminDatabaseData | null; loading: boolean; error: string; onRetry: () => void }) {
+function Overview({ onImport, onUpload, adminName, data, loading, error, onRetry }: { onImport: () => void; onUpload: () => void; adminName: string; data: AdminDatabaseData | null; loading: boolean; error: string; onRetry: () => void }) {
   const firstName = adminName.trim().split(/\s+/)[0] || "مسؤول المنصة";
   const recentCourses = data?.courses.slice(0, 4) ?? [];
   const recentImports = data?.imports.slice(0, 4) ?? [];
@@ -324,7 +369,10 @@ function Overview({ onImport, adminName, data, loading, error, onRetry }: { onIm
     <>
       <section className="page-heading">
         <div><p className="eyebrow">لوحة التشغيل</p><h1>صباح الخير، {firstName}</h1><p>إليك ملخص حالة الدورات والشهادات اليوم.</p></div>
-        <div className="heading-actions"><button className="primary-button" type="button" onClick={onImport}>استيراد ملف Excel</button></div>
+        <div className="heading-actions">
+          <button className="primary-button" type="button" onClick={onImport}>استيراد ملف Excel</button>
+          <button className="secondary-button" type="button" onClick={onUpload}>رفع شهادة PDF</button>
+        </div>
       </section>
       <section className="metrics-grid" aria-label="مؤشرات المنصة">
         <MetricCard label="الدورات النشطة" value={loading ? "—" : String(metrics?.activeCourses ?? 0)} detail={`${metrics?.totalCourses ?? 0} دورة مسجلة`} tone="slate" />
@@ -346,7 +394,7 @@ function Overview({ onImport, adminName, data, loading, error, onRetry }: { onIm
         </article>
         <aside className="panel activity-panel">
           <div className="panel-head"><div><h2>آخر عمليات الاستيراد</h2><p>مباشرة من سجل Firestore</p></div></div>
-          <div className="activity-list">{recentImports.map((item, index) => <div className="activity-item" key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.fileName}</strong><p>{item.completedRows} من {item.totalRows} سجلًا · {importStatusLabel(item.status)}</p><small>{formatDatabaseDate(item.createdAt)}</small></div></div>)}</div>
+          <div className="activity-list">{recentImports.map((item, index) => <div className="activity-item" key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.fileName}</strong><p>{item.completedRows} من {item.totalRows} سجلًا · {importStatusLabel(item.status)}</p><small>بواسطة {importActorLabel(item)} · {formatDatabaseDate(item.createdAt)}</small></div></div>)}</div>
           {!loading && !error && !recentImports.length ? <DataMessage loading={false} error="" empty="لا توجد عمليات استيراد" onRetry={onRetry} /> : null}
         </aside>
       </section>
@@ -863,7 +911,7 @@ function ImportsView({ imports, loading, error, onRetry, onImport }: { imports: 
       <div className="panel-head"><div><h2>استيراد بيانات الدورات والمتدربين</h2><p>يتم ربط الموظف بشركته باستخدام رقم السجل التجاري في عمود CrNumber</p></div></div>
       <button type="button" className="drop-zone" onClick={onImport}><span className="upload-symbol" aria-hidden="true">XLSX</span><strong>اختر ملف Excel لبدء الاستيراد</strong><small>تتم مراجعة البيانات وعرض الأخطاء قبل الحفظ النهائي</small></button>
       <DataMessage loading={loading} error={error} empty={!imports.length ? "لا توجد عمليات استيراد سابقة" : undefined} onRetry={onRetry} />
-      {!loading && !error && imports.length ? <div className="import-history"><h3>آخر عمليات الاستيراد</h3>{imports.map((item) => <div key={item.id}><span className="file-chip">XLSX</span><p><strong>{item.fileName}</strong><small>{item.completedRows} من {item.totalRows} سجلًا · {item.importedByEmail || "مسؤول المنصة"} · {formatDatabaseDate(item.createdAt)}</small></p><StatusBadge status={importStatusLabel(item.status)} /></div>)}</div> : null}
+      {!loading && !error && imports.length ? <div className="import-history"><h3>آخر عمليات الاستيراد</h3>{imports.map((item) => <div key={item.id}><span className="file-chip">XLSX</span><p><strong>{item.fileName}</strong><small>{item.completedRows} من {item.totalRows} سجلًا · بواسطة {importActorLabel(item)} · {formatDatabaseDate(item.createdAt)}</small></p><StatusBadge status={importStatusLabel(item.status)} /></div>)}</div> : null}
     </section>
   );
 }
@@ -948,11 +996,65 @@ function SettingsView({ profile, onSuccess }: { profile: AdminProfile; onSuccess
   </>;
 }
 
-function ActivityView({ imports, loading, error, onRetry }: { imports: DatabaseImport[]; loading: boolean; error: string; onRetry: () => void }) {
-  return <section className="panel full-panel"><div className="panel-head"><div><h2>سجل النشاط</h2><p>عمليات الاستيراد المسجلة في قاعدة البيانات</p></div></div><DataMessage loading={loading} error={error} empty={!imports.length ? "لا توجد نشاطات مسجلة" : undefined} onRetry={onRetry} />{!loading && !error ? <div className="activity-list wide">{imports.map((item, index) => <div className="activity-item" key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.fileName}</strong><p>{item.completedRows} من {item.totalRows} سجلًا · {importStatusLabel(item.status)}</p><small>{formatDatabaseDate(item.createdAt)}</small></div></div>)}</div> : null}</section>;
+function ActivityView({ refreshVersion }: { refreshVersion: number }) {
+  const [imports, setImports] = useState<DatabaseImport[]>([]);
+  const [cursor, setCursor] = useState<DatabaseActivityCursor | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadFirstPage = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const page = await loadAdminActivityPage();
+      setImports(page.imports);
+      setCursor(page.cursor);
+      setHasMore(page.hasMore);
+    } catch (activityError) {
+      setError(getAdminDatabaseError(activityError));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const requestTimer = window.setTimeout(() => void loadFirstPage(), 0);
+    return () => window.clearTimeout(requestTimer);
+  }, [loadFirstPage, refreshVersion]);
+
+  async function loadMoreActivities() {
+    if (!cursor || loadingMore) return;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const page = await loadAdminActivityPage(cursor);
+      setImports((current) => {
+        const existingIds = new Set(current.map((item) => item.id));
+        return [...current, ...page.imports.filter((item) => !existingIds.has(item.id))];
+      });
+      setCursor(page.cursor);
+      setHasMore(page.hasMore);
+    } catch (activityError) {
+      setError(getAdminDatabaseError(activityError));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  return <section className="panel full-panel">
+    <div className="panel-head"><div><h2>سجل النشاط</h2><p>أحدث عمليات الاستيراد مع اسم المنفّذ</p></div></div>
+    <DataMessage loading={loading} error={!imports.length ? error : ""} empty={!imports.length && !loading && !error ? "لا توجد نشاطات مسجلة" : undefined} onRetry={() => void loadFirstPage()} />
+    {!loading && imports.length ? <>
+      <div className="activity-list wide">{imports.map((item, index) => <div className="activity-item" key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.fileName}</strong><p>{item.completedRows} من {item.totalRows} سجلًا · {importStatusLabel(item.status)}</p><small>بواسطة {importActorLabel(item)} · {formatDatabaseDate(item.createdAt)}</small></div></div>)}</div>
+      {error ? <p className="auth-error activity-page-error" role="alert">{error}</p> : null}
+      {hasMore ? <div className="activity-load-more"><span>تم تحميل {imports.length} نشاطًا</span><button type="button" className="secondary-button" onClick={() => void loadMoreActivities()} disabled={loadingMore}>{loadingMore ? "جارٍ التحميل..." : "تحميل 10 نشاطات أخرى"}</button></div> : null}
+    </> : null}
+  </section>;
 }
 
-function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "upload"; onClose: () => void; onSuccess: (message: string) => void | Promise<void>; onDataChanged: () => void | Promise<void> }) {
+function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "import" | "upload"; actorName: string; onClose: () => void; onSuccess: (message: string) => void | Promise<void>; onDataChanged: () => void | Promise<void> }) {
   const [file, setFile] = useState<File | null>(null);
   const [certificateFiles, setCertificateFiles] = useState<File[]>([]);
   const [importResult, setImportResult] = useState<CertificateImportResult | null>(null);
@@ -978,6 +1080,7 @@ function Modal({ type, onClose, onSuccess, onDataChanged }: { type: "import" | "
         const result = await importCertificatesToFirestore(
           importResult.records,
           file.name,
+          actorName,
           (completed, total) => setSaveProgress({ completed, total }),
         );
         await onSuccess(`تم حفظ ${result.importedRows} سجلًا في Firestore بنجاح`);
@@ -1161,6 +1264,7 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
   const [databaseLoading, setDatabaseLoading] = useState(true);
   const [databaseError, setDatabaseError] = useState("");
   const [dataScope, setDataScope] = useState<"overview" | "full" | null>(null);
+  const [activityRefreshVersion, setActivityRefreshVersion] = useState(0);
   const databaseRequestActive = useRef(false);
   const title = navItems.find((item) => item.id === view)?.label ?? "نظرة عامة";
 
@@ -1183,7 +1287,7 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
 
   useEffect(() => {
     const needsOverview = view === "overview" && dataScope === null;
-    const needsFullData = view !== "overview" && dataScope !== "full";
+    const needsFullData = view !== "overview" && view !== "activity" && dataScope !== "full";
     if (!needsOverview && !needsFullData) return;
     const requestTimer = window.setTimeout(() => void refreshDatabase(), 0);
     return () => window.clearTimeout(requestTimer);
@@ -1221,25 +1325,33 @@ function AdminDashboard({ onLogout, profile }: { onLogout: () => void; profile: 
     : "—";
   const currentDate = new Intl.DateTimeFormat("ar-SA", { day: "numeric", month: "long", year: "numeric" }).format(new Date());
 
+  function refreshCurrentView() {
+    if (view === "activity") {
+      setActivityRefreshVersion((current) => current + 1);
+      return;
+    }
+    void refreshDatabase();
+  }
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">تجاوز إلى المحتوى</a>
       <AdminSidebar active={view} setActive={setView} onLogout={onLogout} profile={profile} />
       <div className="app-main">
-        <header className="topbar"><div><span>مركز إدارة الشهادات</span><strong>{title}</strong></div><div><button type="button" className="sync-status sync-button" onClick={() => void refreshDatabase()} disabled={databaseLoading}><i /> {databaseLoading ? "جارٍ المزامنة..." : `آخر مزامنة: ${syncTime}`}</button><span className="date-label">{currentDate}</span></div></header>
+        <header className="topbar"><div><span>مركز إدارة الشهادات</span><strong>{title}</strong></div><div><button type="button" className="sync-status sync-button" onClick={refreshCurrentView} disabled={view !== "activity" && databaseLoading}><i /> {view === "activity" ? "تحديث السجل" : databaseLoading ? "جارٍ المزامنة..." : `آخر مزامنة: ${syncTime}`}</button><span className="date-label">{currentDate}</span></div></header>
         <main id="main-content" className="dashboard-content">
-          {view === "overview" && <Overview onImport={() => setModal("import")} adminName={profile.name} data={databaseData} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
+          {view === "overview" && <Overview onImport={() => setModal("import")} onUpload={() => setModal("upload")} adminName={profile.name} data={databaseData} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "courses" && <CoursesView courses={courses} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
           {view === "trainees" && <TraineesView trainees={trainees} certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "companies" && <CompaniesView companies={companies} trainees={trainees} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onChanged={refreshDatabase} onMessage={showToast} />}
           {view === "users" && <UsersView currentUser={profile} />}
           {view === "certificates" && <CertificatesView certificates={certificates} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onUpload={() => setModal("upload")} onMessage={showToast} onDataChanged={syncAfterMutation} />}
           {view === "imports" && <ImportsView imports={imports} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} onImport={() => setModal("import")} />}
-          {view === "activity" && <ActivityView imports={imports} loading={databaseLoading} error={databaseError} onRetry={() => void refreshDatabase()} />}
+          {view === "activity" && <ActivityView refreshVersion={activityRefreshVersion} />}
           {view === "settings" && <SettingsView profile={profile} onSuccess={showToast} />}
         </main>
       </div>
-      {modal && <Modal type={modal} onClose={() => setModal(null)} onSuccess={success} onDataChanged={syncAfterMutation} />}
+      {modal && <Modal type={modal} actorName={profile.name} onClose={() => setModal(null)} onSuccess={success} onDataChanged={syncAfterMutation} />}
       <div className={`toast ${toast ? "show" : ""}`} role="status" aria-live="polite">{toast}</div>
     </div>
   );

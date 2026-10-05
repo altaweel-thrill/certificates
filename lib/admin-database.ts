@@ -1,5 +1,6 @@
 import { getFirebaseAuth, getFirebaseFirestore } from "./firebase";
 import { refreshDashboardStats } from "./dashboard-stats";
+import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 type RawDocument = Record<string, unknown> & { id: string };
 
@@ -63,8 +64,17 @@ export type DatabaseImport = {
   totalRows: number;
   completedRows: number;
   status: "processing" | "completed" | "failed";
+  importedByName: string;
   importedByEmail: string;
   createdAt: number;
+};
+
+export type DatabaseActivityCursor = QueryDocumentSnapshot<DocumentData>;
+
+export type DatabaseActivityPage = {
+  imports: DatabaseImport[];
+  cursor: DatabaseActivityCursor | null;
+  hasMore: boolean;
 };
 
 export type DatabaseCompany = {
@@ -223,6 +233,7 @@ export async function loadAdminOverviewData(): Promise<AdminDatabaseData> {
     totalRows: number(item.totalRows),
     completedRows: number(item.completedRows),
     status: normalizeImportStatus(item.status),
+    importedByName: text(item.importedByName),
     importedByEmail: text(item.importedByEmail),
     createdAt: timestamp(item.createdAt),
   }));
@@ -241,6 +252,51 @@ export async function loadAdminOverviewData(): Promise<AdminDatabaseData> {
       pendingCertificates: number(stats.pendingCertificates),
     },
     loadedAt: dateValue(stats.updatedAt) ?? new Date(),
+  };
+}
+
+export async function loadAdminActivityPage(cursor: DatabaseActivityCursor | null = null): Promise<DatabaseActivityPage> {
+  const { collection, doc, getDoc, getDocs, limit, orderBy, query, startAfter } = await import("firebase/firestore");
+  const auth = await getFirebaseAuth();
+  const database = await getFirebaseFirestore();
+
+  if (!auth.currentUser) throw new Error("يجب تسجيل الدخول كمسؤول لقراءة سجل النشاط.");
+
+  const pageSize = 10;
+  const importsReference = collection(database, "imports");
+  const activityQuery = cursor
+    ? query(importsReference, orderBy("createdAt", "desc"), startAfter(cursor), limit(pageSize))
+    : query(importsReference, orderBy("createdAt", "desc"), limit(pageSize));
+  const importSnapshot = await getDocs(activityQuery);
+  const rawImports: RawDocument[] = importSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+
+  const missingActorIds = [...new Set(rawImports
+    .filter((item) => !text(item.importedByName))
+    .map((item) => text(item.importedBy))
+    .filter(Boolean))];
+  const actorSnapshots = await Promise.all(missingActorIds.map((userId) => getDoc(doc(database, "users", userId))));
+  const actorById = new Map(actorSnapshots
+    .filter((snapshot) => snapshot.exists())
+    .map((snapshot) => [snapshot.id, snapshot.data()]));
+
+  const imports = rawImports.map<DatabaseImport>((item) => {
+    const user = actorById.get(text(item.importedBy));
+    return {
+      id: item.id,
+      fileName: text(item.sourceFileName) || "ملف Excel",
+      totalRows: number(item.totalRows),
+      completedRows: number(item.completedRows),
+      status: normalizeImportStatus(item.status),
+      importedByName: text(item.importedByName) || text(user?.name) || text(user?.displayName),
+      importedByEmail: text(item.importedByEmail) || text(user?.email),
+      createdAt: timestamp(item.createdAt),
+    };
+  });
+
+  return {
+    imports,
+    cursor: importSnapshot.docs.at(-1) ?? null,
+    hasMore: importSnapshot.size === pageSize,
   };
 }
 
@@ -269,6 +325,7 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
 
   const courseById = new Map(rawCourses.map((course) => [course.id, course]));
   const traineeById = new Map(rawTrainees.map((trainee) => [trainee.id, trainee]));
+  const userById = new Map(rawUsers.map((user) => [user.id, user]));
   const courseTrainees = new Map<string, Set<string>>();
   const courseCertificates = new Map<string, number>();
   const courseIssuedCertificates = new Map<string, number>();
@@ -379,15 +436,19 @@ export async function loadAdminDatabaseData(): Promise<AdminDatabaseData> {
     };
   }).sort((a, b) => b.updatedAt - a.updatedAt || a.number.localeCompare(b.number));
 
-  const imports = rawImports.map<DatabaseImport>((item) => ({
-    id: item.id,
-    fileName: text(item.sourceFileName) || "ملف Excel",
-    totalRows: number(item.totalRows),
-    completedRows: number(item.completedRows),
-    status: normalizeImportStatus(item.status),
-    importedByEmail: text(item.importedByEmail),
-    createdAt: timestamp(item.createdAt),
-  })).sort((a, b) => b.createdAt - a.createdAt);
+  const imports = rawImports.map<DatabaseImport>((item) => {
+    const user = userById.get(text(item.importedBy));
+    return {
+      id: item.id,
+      fileName: text(item.sourceFileName) || "ملف Excel",
+      totalRows: number(item.totalRows),
+      completedRows: number(item.completedRows),
+      status: normalizeImportStatus(item.status),
+      importedByName: text(item.importedByName) || text(user?.name) || text(user?.displayName),
+      importedByEmail: text(item.importedByEmail) || text(user?.email),
+      createdAt: timestamp(item.createdAt),
+    };
+  }).sort((a, b) => b.createdAt - a.createdAt);
 
   const companyEmployeeCounts = new Map<string, number>();
   const companyCertificateCounts = new Map<string, number>();

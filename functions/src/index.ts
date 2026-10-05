@@ -490,6 +490,7 @@ async function rebuildDashboardStats(updatedBy: string) {
       totalRows: typeof data.totalRows === "number" ? data.totalRows : 0,
       completedRows: typeof data.completedRows === "number" ? data.completedRows : 0,
       status: typeof data.status === "string" ? data.status : "processing",
+      importedByName: typeof data.importedByName === "string" ? data.importedByName : "",
       importedByEmail: typeof data.importedByEmail === "string" ? data.importedByEmail : "",
       createdAt: data.createdAt ?? null,
     };

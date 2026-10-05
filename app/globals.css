@@ -66,7 +66,7 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px r
 .primary-button, .secondary-button, .download-button, .danger-button { min-height: 44px; padding: 10px 17px; border-radius: 10px; font-size: 14px; font-weight: 800; transition: background .2s, color .2s, border-color .2s, box-shadow .2s; }
 .primary-button { border: 1px solid var(--orange); color: white; background: var(--orange); box-shadow: 0 7px 18px rgba(41,68,146,.18); }
 .primary-button:hover { border-color: var(--orange-dark); background: var(--orange-dark); }
-.primary-button:disabled { cursor: wait; opacity: .65; }
+.primary-button:disabled { cursor: not-allowed; opacity: .65; }
 .secondary-button { border: 1px solid #ccd5df; color: var(--ink); background: white; }
 .secondary-button:hover { border-color: #9daab8; background: #f8fafc; }
 .danger-button { border: 1px solid rgba(190,24,93,.24); color: #9f1239; background: #fff1f2; }
@@ -79,7 +79,14 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px r
 .verification-summary strong { font-size: 14px; }
 .verification-summary button { justify-self: end; border: 0; color: var(--orange-dark); background: transparent; font-size: 12px; font-weight: 800; }
 #trainee-recaptcha { min-height: 0; }
-#trainee-recaptcha:has(iframe) { min-height: 78px; display: grid; place-items: center; margin: 12px 0; }
+#trainee-recaptcha:has(iframe) { min-height: 78px; display: grid; place-items: center; margin: 10px 0; }
+.captcha-step { margin: 0 0 17px; padding: 12px 13px; border: 1px solid #d7e0e8; border-radius: 10px; background: #f8fafc; transition: border-color .2s, background .2s; }
+.captcha-step.verified { border-color: #b9ddcf; background: var(--green-soft); }
+.captcha-step-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.captcha-step-heading strong { color: var(--ink); font-size: 14px; }
+.captcha-step-heading span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.captcha-step.verified .captcha-step-heading span { color: var(--green); }
+.captcha-step > p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .login-footer { margin: auto 0 0; padding-top: 30px; color: #8793a2; font-size: 12px; text-align: center; }
 .login-footer p { margin: 0; }
 .login-verification-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; color: #526477; font-size: 12px; font-weight: 700; text-decoration: none; transition: color .2s; }
@@ -255,6 +262,8 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
 .file-chip { width: 38px; height: 41px; font-size: 12px; }
 .import-history p { margin: 0; }.import-history strong { display: block; font-size: 12px; }.import-history small { color: var(--muted); font-size: 12px; }
 .activity-list.wide { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+.activity-load-more { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 4px 20px 22px; color: var(--muted); font-size: 12px; }
+.activity-load-more .secondary-button { min-width: 180px; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; }
 .settings-grid article { padding: 18px; border: 1px solid #e1e7ed; border-radius: 12px; background: #fbfcfd; }
 .settings-grid h3 { font-size: 16px; }
@@ -512,6 +521,7 @@ td small { display: block; margin-top: 3px; color: #8a96a5; font-size: 12px; }
   .security-settings-card { align-items: stretch; flex-direction: column; }
   .security-settings-card .secondary-button { width: 100%; }
   .activity-list.wide { grid-template-columns: 1fr; }
+  .activity-load-more { align-items: stretch; flex-direction: column; text-align: center; }
   .company-detail-metrics { grid-template-columns: repeat(3, 1fr); }
   .trainee-header { padding: 0 20px; }
   .header-official-logo .official-logo { width: 250px; }

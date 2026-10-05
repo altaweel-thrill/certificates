@@ -77,6 +77,7 @@ async function prepareRecord(source: CertificateImportRecord): Promise<PreparedR
 export async function importCertificatesToFirestore(
   records: CertificateImportRecord[],
   sourceFileName: string,
+  importedByName: string,
   onProgress?: (completed: number, total: number) => void,
 ) {
   const { collection, doc, serverTimestamp, setDoc, writeBatch } = await import("firebase/firestore");
@@ -95,6 +96,7 @@ export async function importCertificatesToFirestore(
     totalRows: records.length,
     completedRows: 0,
     importedBy: currentUser.uid,
+    importedByName: importedByName.trim() || currentUser.displayName || currentUser.email?.split("@")[0] || "مسؤول المنصة",
     importedByEmail: currentUser.email ?? "",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

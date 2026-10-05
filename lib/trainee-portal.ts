@@ -30,6 +30,7 @@ export type TraineePortalData = {
 
 let recaptchaVerifier: RecaptchaVerifier | null = null;
 let recaptchaContainer: HTMLElement | null = null;
+let recaptchaVerified = false;
 const SMS_REQUEST_COOLDOWN_MS = 60_000;
 const SMS_REQUEST_TIMESTAMP_KEY = "itti:last-sms-request-at";
 
@@ -85,19 +86,11 @@ function toInternationalMobile(value: string) {
   return local ? `+966${local.slice(1)}` : "";
 }
 
-export async function sendTraineeVerificationCode(mobile: string): Promise<ConfirmationResult> {
-  const internationalMobile = toInternationalMobile(mobile);
-  if (!internationalMobile) throw new Error("أدخل رقم جوال سعودي صحيحًا يبدأ بـ 05.");
-
-  const lastRequestAt = Number(window.sessionStorage.getItem(SMS_REQUEST_TIMESTAMP_KEY) || 0);
-  const remainingSeconds = Math.ceil((SMS_REQUEST_COOLDOWN_MS - (Date.now() - lastRequestAt)) / 1000);
-  if (remainingSeconds > 0) {
-    const cooldownError = new Error(`انتظر ${remainingSeconds} ثانية قبل طلب رمز SMS جديد.`) as Error & { code: string };
-    cooldownError.code = "auth/sms-request-cooldown";
-    throw cooldownError;
-  }
-
-  const { RecaptchaVerifier, initializeRecaptchaConfig, signInWithPhoneNumber } = await import("firebase/auth");
+export async function prepareTraineeRecaptcha(
+  onVerified: () => void,
+  onExpired: () => void,
+): Promise<void> {
+  const { RecaptchaVerifier, initializeRecaptchaConfig } = await import("firebase/auth");
   const auth = await getFirebaseAuth();
   auth.languageCode = "ar";
   const isLocalDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
@@ -110,12 +103,53 @@ export async function sendTraineeVerificationCode(mobile: string): Promise<Confi
   recaptchaContainer = container;
   recaptchaVerifier = new RecaptchaVerifier(auth, container, {
     size: isLocalDevelopment ? "invisible" : "normal",
-    "expired-callback": () => destroyTraineeRecaptcha(),
+    callback: () => {
+      recaptchaVerified = true;
+      onVerified();
+    },
+    "expired-callback": () => {
+      recaptchaVerified = false;
+      onExpired();
+    },
+    "error-callback": () => {
+      recaptchaVerified = false;
+      onExpired();
+    },
   });
   await recaptchaVerifier.render();
+
+  // Local development uses Firebase test phone numbers and a mock verifier.
+  if (isLocalDevelopment) {
+    recaptchaVerified = true;
+    onVerified();
+  }
+}
+
+export async function sendTraineeVerificationCode(mobile: string): Promise<ConfirmationResult> {
+  const internationalMobile = toInternationalMobile(mobile);
+  if (!internationalMobile) throw new Error("أدخل رقم جوال سعودي صحيحًا يبدأ بـ 05.");
+
+  const lastRequestAt = Number(window.sessionStorage.getItem(SMS_REQUEST_TIMESTAMP_KEY) || 0);
+  const remainingSeconds = Math.ceil((SMS_REQUEST_COOLDOWN_MS - (Date.now() - lastRequestAt)) / 1000);
+  if (remainingSeconds > 0) {
+    const cooldownError = new Error(`انتظر ${remainingSeconds} ثانية قبل طلب رمز SMS جديد.`) as Error & { code: string };
+    cooldownError.code = "auth/sms-request-cooldown";
+    throw cooldownError;
+  }
+
+  if (!recaptchaVerifier || !recaptchaVerified) {
+    const captchaError = new Error("أكمل التحقق الأمني قبل طلب رمز SMS.") as Error & { code: string };
+    captchaError.code = "auth/captcha-not-completed";
+    throw captchaError;
+  }
+
+  const { signInWithPhoneNumber } = await import("firebase/auth");
+  const auth = await getFirebaseAuth();
   window.sessionStorage.setItem(SMS_REQUEST_TIMESTAMP_KEY, String(Date.now()));
   try {
-    return await signInWithPhoneNumber(auth, internationalMobile, recaptchaVerifier);
+    const confirmation = await signInWithPhoneNumber(auth, internationalMobile, recaptchaVerifier);
+    destroyTraineeRecaptcha();
+    return confirmation;
   } catch (error) {
     destroyTraineeRecaptcha();
     throw error;
@@ -124,6 +158,7 @@ export async function sendTraineeVerificationCode(mobile: string): Promise<Confi
 
 export function resetTraineeRecaptcha() {
   if (!recaptchaVerifier) return;
+  recaptchaVerified = false;
   void recaptchaVerifier.render()
     .then((widgetId) => {
       const captchaApi = (window as typeof window & { grecaptcha?: { reset: (id?: number) => void } }).grecaptcha;
@@ -139,6 +174,7 @@ export function destroyTraineeRecaptcha() {
     // Firebase may already have released a failed verifier.
   }
   recaptchaVerifier = null;
+  recaptchaVerified = false;
   recaptchaContainer?.replaceChildren();
   recaptchaContainer = null;
 }
@@ -236,6 +272,7 @@ export function getTraineeAuthError(error: unknown) {
   const errorDetails = `${code} ${message}`.toLowerCase();
   const isLocalDevelopment = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
   if (code.includes("sms-request-cooldown")) return message;
+  if (code.includes("captcha-not-completed")) return message;
   if (code.includes("invalid-verification-code")) return "رمز التحقق غير صحيح.";
   if (code.includes("code-expired")) return "انتهت صلاحية رمز التحقق. أرسل رمزًا جديدًا.";
   if (code.includes("invalid-phone-number")) return "رقم الجوال غير صحيح.";
