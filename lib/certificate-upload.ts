@@ -1,6 +1,7 @@
 import { getFirebaseAuth, getFirebaseFirestore, getFirebaseStorage } from "./firebase";
 
 export type CertificateFileType = "local" | "international" | "card";
+export type CertificateUploadNamingMode = "certificate-number" | "legacy-ctrid";
 
 const duplicateCertificateCode = "certificate/already-uploaded";
 
@@ -46,6 +47,11 @@ function safeStorageName(value: string) {
   return value.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/-+/g, "-").slice(0, 180);
 }
 
+function normalizedCertificateFileName(certificateNumber: string, fileType: CertificateFileType) {
+  const prefix = fileType === "international" ? "i_" : fileType === "card" ? "c_" : "";
+  return safeStorageName(`${prefix}${certificateNumber}.pdf`);
+}
+
 function certificateAlreadyUploadedError(certificateNumber: string, fileLabel: string) {
   return Object.assign(
     new Error(`${fileLabel} رقم ${certificateNumber} مرفوعة مسبقًا.`),
@@ -62,7 +68,11 @@ export function isCertificateAlreadyUploadedError(error: unknown) {
   );
 }
 
-export async function uploadCertificateByFileName(file: File, onProgress?: (percentage: number) => void) {
+export async function uploadCertificateByFileName(
+  file: File,
+  namingMode: CertificateUploadNamingMode,
+  onProgress?: (percentage: number) => void,
+) {
   const { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, updateDoc, where } = await import("firebase/firestore");
   const { ref, uploadBytesResumable } = await import("firebase/storage");
   const auth = await getFirebaseAuth();
@@ -76,29 +86,52 @@ export async function uploadCertificateByFileName(file: File, onProgress?: (perc
   }
   if (file.size <= 0) throw new Error("ملف PDF فارغ.");
   if (file.size > 20 * 1024 * 1024) throw new Error("حجم ملف PDF يجب ألا يتجاوز 20 ميجابايت.");
+  if (namingMode !== "certificate-number" && namingMode !== "legacy-ctrid") {
+    throw new Error("اختر طريقة مطابقة أسماء الملفات قبل الرفع.");
+  }
 
-  const { certificateNumber, fileType, fileLabel } = certificateDetailsFromFileName(file.name);
+  const parsedFile = certificateDetailsFromFileName(file.name);
+  let certificateNumber = parsedFile.certificateNumber;
+  let fileType = parsedFile.fileType;
+  let fileLabel = parsedFile.fileLabel;
+  let matchedLegacyCtrId = "";
   if (!certificateNumber) throw new Error("اسم الملف غير صحيح. استخدم 2345.pdf أو i_2345.pdf أو c_2345.pdf");
 
-  let certificateReference = doc(database, "certificates", safeDocumentId(certificateNumber));
-  let certificateSnapshot = await getDoc(certificateReference);
-
-  if (!certificateSnapshot.exists()) {
+  // Resolve only the selected field, even if the same value exists in the other field.
+  const certificateSnapshot = await (async () => {
+    const lookupField = namingMode === "legacy-ctrid" ? "ctrId" : "certificateNumber";
+    if (namingMode === "certificate-number") {
+      const directMatch = await getDoc(doc(database, "certificates", safeDocumentId(certificateNumber)));
+      if (directMatch.exists() && String(directMatch.data().certificateNumber ?? "").trim() === certificateNumber) {
+        return directMatch;
+      }
+    }
     const matches = await getDocs(query(
       collection(database, "certificates"),
-      where("certificateNumber", "==", certificateNumber),
-      limit(1),
+      where(lookupField, "==", certificateNumber),
+      limit(2),
     ));
-    if (!matches.empty) {
-      certificateSnapshot = matches.docs[0];
-      certificateReference = matches.docs[0].ref;
+    const lookupLabel = namingMode === "legacy-ctrid" ? "CTRID" : "CertificateNo";
+    if (matches.size > 1) {
+      throw new Error(`القيمة ${lookupLabel} ${certificateNumber} مرتبطة بأكثر من شهادة. راجع البيانات قبل الرفع.`);
     }
+    if (matches.empty) {
+      throw new Error(`لم يتم العثور على شهادة بقيمة ${lookupLabel} ${certificateNumber}. تأكد من البيانات المستوردة من Excel ووضع أسماء الملفات المحدد.`);
+    }
+    return matches.docs[0];
+  })();
+
+  if (namingMode === "legacy-ctrid") {
+    matchedLegacyCtrId = certificateNumber;
+    certificateNumber = String(certificateSnapshot.data().certificateNumber ?? "").trim();
+    if (!certificateNumber) {
+      throw new Error(`تم العثور على CTRID ${matchedLegacyCtrId} لكن رقم الشهادة الجديد غير موجود.`);
+    }
+    fileType = parsedFile.fileType === "card" ? "card" : "international";
+    fileLabel = certificateFileLabels[fileType];
   }
 
-  if (!certificateSnapshot.exists()) {
-    throw new Error(`لم يتم العثور على شهادة رقم ${certificateNumber}. تأكد أن اسم الملف يطابق رقم الشهادة في Excel.`);
-  }
-
+  const certificateReference = certificateSnapshot.ref;
   const certificateData = certificateSnapshot.data();
   const storedFiles = certificateData.files && typeof certificateData.files === "object"
     ? certificateData.files as Record<string, unknown>
@@ -118,16 +151,18 @@ export async function uploadCertificateByFileName(file: File, onProgress?: (perc
     throw certificateAlreadyUploadedError(certificateNumber, fileLabel);
   }
 
-  const storagePath = `certificates/${certificateReference.id}/${fileType}/${safeStorageName(`${fileType}-${certificateNumber}.pdf`)}`;
+  const normalizedFileName = normalizedCertificateFileName(certificateNumber, fileType);
+  const storagePath = `certificates/${certificateReference.id}/${fileType}/${normalizedFileName}`;
   const storageReference = ref(storage, storagePath);
   const uploadTask = uploadBytesResumable(storageReference, file, {
     contentType: "application/pdf",
-    contentDisposition: `attachment; filename="${safeStorageName(file.name)}"`,
+    contentDisposition: `attachment; filename="${normalizedFileName}"`,
     customMetadata: {
       certificateId: certificateReference.id,
       certificateNumber,
       fileType,
       uploadedBy: auth.currentUser.uid,
+      ...(matchedLegacyCtrId ? { legacyCtrId: matchedLegacyCtrId } : {}),
     },
   });
   await new Promise<void>((resolve, reject) => {
@@ -147,7 +182,9 @@ export async function uploadCertificateByFileName(file: File, onProgress?: (perc
   const fileField = `files.${fileType}`;
   await updateDoc(certificateReference, {
     [`${fileField}.storagePath`]: storagePath,
-    [`${fileField}.originalFileName`]: file.name,
+    [`${fileField}.originalFileName`]: normalizedFileName,
+    [`${fileField}.sourceFileName`]: file.name,
+    [`${fileField}.matchedLegacyCtrId`]: matchedLegacyCtrId || null,
     [`${fileField}.fileSize`]: file.size,
     [`${fileField}.contentType`]: "application/pdf",
     [`${fileField}.uploadedBy`]: auth.currentUser.uid,
@@ -157,7 +194,7 @@ export async function uploadCertificateByFileName(file: File, onProgress?: (perc
     updatedAt: serverTimestamp(),
   });
 
-  return { certificateId: certificateReference.id, certificateNumber, fileType, fileLabel };
+  return { certificateId: certificateReference.id, certificateNumber, fileType, fileLabel, normalizedFileName, matchedLegacyCtrId };
 }
 
 export async function deleteCertificateFile(

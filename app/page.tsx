@@ -36,6 +36,7 @@ import {
   getCertificateUploadError,
   isCertificateAlreadyUploadedError,
   uploadCertificateByFileName,
+  type CertificateUploadNamingMode,
 } from "../lib/certificate-upload";
 import {
   type AdminDatabaseData,
@@ -1057,6 +1058,8 @@ function ActivityView({ refreshVersion }: { refreshVersion: number }) {
 function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "import" | "upload"; actorName: string; onClose: () => void; onSuccess: (message: string) => void | Promise<void>; onDataChanged: () => void | Promise<void> }) {
   const [file, setFile] = useState<File | null>(null);
   const [certificateFiles, setCertificateFiles] = useState<File[]>([]);
+  const [uploadNamingMode, setUploadNamingMode] = useState<CertificateUploadNamingMode>("certificate-number");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [importResult, setImportResult] = useState<CertificateImportResult | null>(null);
   const [importError, setImportError] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -1101,15 +1104,17 @@ function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "
     const failures: Array<{ file: File; message: string }> = [];
     const duplicates: File[] = [];
     let successfulUploads = 0;
+    let renamedLegacyUploads = 0;
 
     for (let index = 0; index < certificateFiles.length; index += 1) {
       const certificateFile = certificateFiles[index];
       setUploadProgress({ current: index + 1, total: certificateFiles.length, percentage: 0 });
       try {
-        await uploadCertificateByFileName(certificateFile, (percentage) => {
+        const uploadResult = await uploadCertificateByFileName(certificateFile, uploadNamingMode, (percentage) => {
           setUploadProgress({ current: index + 1, total: certificateFiles.length, percentage });
         });
         successfulUploads += 1;
+        if (uploadResult.matchedLegacyCtrId) renamedLegacyUploads += 1;
       } catch (error) {
         if (isCertificateAlreadyUploadedError(error)) {
           duplicates.push(certificateFile);
@@ -1125,19 +1130,22 @@ function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "
       setCertificateFiles(failures.map((failure) => failure.file));
       const details = failures.slice(0, 3).map((failure) => `${failure.file.name}: ${failure.message}`).join(" | ");
       const duplicateDetails = duplicates.length ? ` وتم تخطي ${duplicates.length} ملف مكرر.` : "";
-      setImportError(`تم رفع ${successfulUploads} ملف، وتعذر رفع ${failures.length}.${duplicateDetails} ${details}`);
+      const renamedDetails = renamedLegacyUploads ? ` تم تحويل ${renamedLegacyUploads} ملف من CTRID إلى الاسم الجديد.` : "";
+      setImportError(`تم رفع ${successfulUploads} ملف، وتعذر رفع ${failures.length}.${duplicateDetails}${renamedDetails} ${details}`);
       return;
     }
     if (duplicates.length) {
       setCertificateFiles([]);
       if (successfulUploads) {
-        await onSuccess(`تم رفع ${successfulUploads} ملف جديد، وتخطي ${duplicates.length} ملف مرفوع مسبقًا`);
+        const renamedDetails = renamedLegacyUploads ? `، وتحويل ${renamedLegacyUploads} ملف من CTRID إلى الاسم الجديد` : "";
+        await onSuccess(`تم رفع ${successfulUploads} ملف جديد، وتخطي ${duplicates.length} ملف مرفوع مسبقًا${renamedDetails}`);
       } else {
         setImportError(`لم يتم رفع ملفات جديدة؛ تم تخطي ${duplicates.length} ملف لأنها مرفوعة مسبقًا.`);
       }
       return;
     }
-    await onSuccess(`تم رفع وربط ${successfulUploads} ملف PDF بنجاح`);
+    const renamedDetails = renamedLegacyUploads ? `، وتحويل ${renamedLegacyUploads} ملف من CTRID إلى الاسم الجديد` : "";
+    await onSuccess(`تم رفع وربط ${successfulUploads} ملف PDF بنجاح${renamedDetails}`);
   };
 
   async function applySelectedFiles(selectedFiles: File[]) {
@@ -1172,6 +1180,17 @@ function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "
     await applySelectedFiles(Array.from(event.target.files ?? []));
   }
 
+  function changeUploadNamingMode(mode: CertificateUploadNamingMode) {
+    if (saving || mode === uploadNamingMode) return;
+    setUploadNamingMode(mode);
+    setCertificateFiles([]);
+    setFile(null);
+    setImportError("");
+    setDragActive(false);
+    setUploadProgress({ current: 0, total: 0, percentage: 0 });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
   function dragOver(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     if (!saving) setDragActive(true);
@@ -1200,10 +1219,26 @@ function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "
         <div className="modal-head"><div><p className="eyebrow">إجراء جديد</p><h2 id="modal-title">{titles[type]}</h2></div><button type="button" className="close-button" onClick={onClose} disabled={saving}>إغلاق</button></div>
         <form onSubmit={submit}>
           <>
+              {type === "upload" ? (
+                <fieldset className="upload-mode-selector" disabled={saving} aria-describedby="upload-mode-hint">
+                  <legend>طريقة مطابقة أسماء الملفات</legend>
+                  <div className="upload-mode-options">
+                    <label className={`upload-mode-option ${uploadNamingMode === "certificate-number" ? "selected" : ""}`}>
+                      <input type="radio" name="upload-naming-mode" value="certificate-number" checked={uploadNamingMode === "certificate-number"} onChange={() => changeUploadNamingMode("certificate-number")} />
+                      <span><strong>أسماء جديدة</strong><small>مطابقة رقم الشهادة <bdi>CertificateNo</bdi></small></span>
+                    </label>
+                    <label className={`upload-mode-option ${uploadNamingMode === "legacy-ctrid" ? "selected" : ""}`}>
+                      <input type="radio" name="upload-naming-mode" value="legacy-ctrid" checked={uploadNamingMode === "legacy-ctrid"} onChange={() => changeUploadNamingMode("legacy-ctrid")} />
+                      <span><strong>أسماء قديمة <bdi>CTRID</bdi></strong><small>مطابقة الرقم القديم وتحويل الاسم</small></span>
+                    </label>
+                  </div>
+                  <p id="upload-mode-hint">اختر وضعًا واحدًا لكل دفعة. تغيير الوضع يمسح الملفات المحددة.</p>
+                </fieldset>
+              ) : null}
               <label className={`file-picker ${dragActive ? "drag-active" : ""}`} htmlFor="modal-file" onDragEnter={dragOver} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFiles}>
-                <input id="modal-file" type="file" accept={type === "import" ? ".xlsx" : "application/pdf,.pdf"} multiple={type === "upload"} onChange={(event) => void selectFiles(event)} />
+                <input ref={fileInputRef} id="modal-file" type="file" accept={type === "import" ? ".xlsx" : "application/pdf,.pdf"} multiple={type === "upload"} disabled={saving} onChange={(event) => void selectFiles(event)} />
                 <span className="upload-symbol" aria-hidden="true">{type === "import" ? "XLSX" : "PDF"}</span>
-                <strong>{selectedCount ? type === "upload" ? `تم اختيار ${selectedCount} ملف PDF` : file?.name : type === "import" ? "اختر ملف Excel المعتمد" : "اختر ملفات PDF"}</strong>
+                <strong>{selectedCount ? type === "upload" ? `تم اختيار ${selectedCount} ملف PDF` : file?.name : type === "import" ? "اختر ملف Excel المعتمد" : uploadNamingMode === "legacy-ctrid" ? "اختر ملفات CTRID القديمة" : "اختر ملفات PDF بالأسماء الجديدة"}</strong>
                 <small>{selectedCount ? `${Math.max(1, Math.round(selectedSize / 1024))} KB إجمالي` : type === "upload" ? "اسحب عدة ملفات هنا أو اضغط للاختيار" : "اسحب الملف هنا أو اضغط للاختيار"}</small>
               </label>
 
@@ -1215,13 +1250,21 @@ function Modal({ type, actorName, onClose, onSuccess, onDataChanged }: { type: "
 
               {type === "upload" ? (
                 <aside className="upload-naming-guide" aria-label="صيغ أسماء ملفات الشهادات">
-                  <strong>صيغة اسم الملف</strong>
+                  <strong>{uploadNamingMode === "legacy-ctrid" ? "صيغة الأسماء القديمة" : "صيغة الأسماء الجديدة"}</strong>
                   <div className="upload-name-examples">
+                    {uploadNamingMode === "legacy-ctrid" ? <>
+                      <span><code>7247.pdf</code><small>شهادة دولية برقم CTRID</small></span>
+                      <span><code>i_7247.pdf</code><small>شهادة دولية برقم CTRID</small></span>
+                      <span><code>c_38835.pdf</code><small>بطاقة دولية برقم CTRID</small></span>
+                    </> : <>
                     <span><code>2345.pdf</code><small>الشهادة المحلية</small></span>
                     <span><code>i_2345.pdf</code><small>الشهادة الدولية</small></span>
                     <span><code>c_2345.pdf</code><small>البطاقة الدولية</small></span>
+                    </>}
                   </div>
-                  <p>سيتم ربط الدورة والمتدرب تلقائيًا حسب رقم الشهادة.</p>
+                  <p>{uploadNamingMode === "legacy-ctrid"
+                    ? <>تتم المطابقة فقط مع <bdi>CTRID</bdi>، ثم حفظ الملف باسم <bdi>i_CertificateNo.pdf</bdi> للشهادة الدولية أو <bdi>c_CertificateNo.pdf</bdi> للبطاقة. إذا تكرر CTRID في أكثر من سجل، يتوقف رفع الملف حتى تصحيح البيانات.</>
+                    : <>تتم المطابقة فقط مع رقم الشهادة <bdi>CertificateNo</bdi> لربط الدورة والمتدرب تلقائيًا.</>}</p>
                 </aside>
               ) : null}
 
