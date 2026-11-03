@@ -60,23 +60,54 @@ they are managed by a trusted server environment.
 
 ## Trainee phone login
 
-The trainee signs in with the national ID and the Saudi mobile number stored by
-the Excel import. Firebase sends an SMS verification code. After the code is
-confirmed, the `activateTraineeSession` Cloud Function verifies that the phone
-number in the Firebase token matches the imported trainee record, then links
-the Firebase UID to that trainee document. Firestore and Storage rules restrict
-the signed-in trainee to that trainee's courses and certificates.
+The trainee enters the national ID and Saudi mobile number stored by the Excel
+import. `sendTraineeOtp` first matches both fields, generates a six-digit code,
+and sends it through Authentica's server-only `POST /api/v2/send-otp` endpoint
+using its documented custom `otp` parameter. `verifyTraineeOtp` validates the
+code locally against an HMAC digest, rechecks the current trainee record, and
+returns a Firebase custom token. The browser signs in with that token, so
+Firestore and Storage access rules and existing trainee UIDs continue to work.
+The new flow does not call Firebase Phone SMS or its RecaptchaVerifier.
 
-Before using this flow:
+The code expires in five minutes, permits five guesses, and can be consumed only
+once. A replacement code invalidates the previous challenge. The backend allows
+one send attempt per minute, up to six per phone per hour and 30 per IP per hour;
+these limits also apply after a page refresh. Disabled and privileged accounts
+cannot be reassigned as trainees. Provider responses and plaintext codes are
+never returned to the browser, stored in Firestore, or logged.
 
-1. Enable **Authentication > Sign-in method > Phone** in Firebase Console.
-2. Under **Authentication > Settings > SMS region policy**, allow Saudi Arabia.
-3. Add the production hostname under **Authorized domains**.
-4. For local development, configure Firebase fictional test phone numbers and
-   codes; production SMS phone authentication must run from an authorized
-   hosted domain.
-5. Deploy the backend and access rules:
-   `firebase deploy --only functions,firestore:rules,storage`.
+Production setup (run from the repository root):
+
+```sh
+firebase functions:secrets:set AUTHENTICA_API_KEY --project certificates-cd263
+npm run build --prefix functions
+firebase deploy --only functions:sendTraineeOtp,functions:verifyTraineeOtp --project certificates-cd263
+```
+
+Paste the Authentica API key at the interactive secret prompt. Do not prefix this
+secret with `NEXT_PUBLIC_`, add it to DigitalOcean's client variables, or commit
+it. Redeploy the web application on DigitalOcean after deploying the functions.
+The key is bound only to the two new Cloud Functions through Secret Manager.
+`functions/.secret.local` is an ignored emulator-only override; it is explicitly
+excluded from deployment and does not configure the production secret.
+
+Firebase custom-token signing requires the function runtime service account to
+have `iam.serviceAccounts.signBlob` permission (the **Service Account Token
+Creator** role on the signing service account), and the IAM Service Account
+Credentials API to be enabled. If signing reports a permissions error, configure
+that permission before testing login. See Firebase's
+[custom token setup](https://firebase.google.com/docs/auth/admin/create-custom-tokens)
+and Authentica's [API reference](https://authenticasa.docs.apiary.io/).
+
+The `traineeOtpChallenges` and `traineeOtpLimits` collections remain inaccessible
+to all clients under the existing default-deny Firestore rules; do not open read
+or write access to them. For automatic cleanup, enable Firestore TTL on the
+`expiresAt` field in both collection groups. Expiry is enforced by the server
+even without TTL. Local frontend testing also sends real Authentica SMS unless
+the backend and provider are mocked; Firebase fictional phone numbers no
+longer intercept these sends.
+
+Run the mocked OTP security and frontend authentication tests with `npm run test:otp`.
 
 ## Certificate Excel import
 

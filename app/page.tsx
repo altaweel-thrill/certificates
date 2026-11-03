@@ -1,7 +1,6 @@
 "use client";
 
 import { ChangeEvent, DragEvent, FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import type { ConfirmationResult } from "firebase/auth";
 import {
   type AdminProfile,
   changeAdminPassword,
@@ -59,12 +58,11 @@ import {
 } from "../lib/platform-session";
 import {
   activateTraineeSession,
-  destroyTraineeRecaptcha,
   getTraineeAuthError,
   loadTraineePortal,
-  prepareTraineeRecaptcha,
   sendTraineeVerificationCode,
   type TraineePortalData,
+  type TraineeVerificationChallenge,
 } from "../lib/trainee-portal";
 import { getTraineeAdminError, updateTraineeDetails, type UpdateTraineeInput } from "../lib/trainee-admin";
 import { signInCompany, getCompanyAuthError } from "../lib/company-auth";
@@ -96,46 +94,57 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
   const [identity, setIdentity] = useState("");
   const [mobile, setMobile] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
-  const [confirmation, setConfirmation] = useState<ConfirmationResult | null>(null);
+  const [confirmation, setConfirmation] = useState<TraineeVerificationChallenge | null>(null);
   const [email, setEmail] = useState("admin@itti.edu.sa");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [captchaLoading, setCaptchaLoading] = useState(false);
-  const [captchaVerified, setCaptchaVerified] = useState(false);
-
-  const prepareCaptcha = useCallback(async () => {
-    setCaptchaLoading(true);
-    setCaptchaVerified(false);
-    try {
-      await prepareTraineeRecaptcha(
-        () => setCaptchaVerified(true),
-        () => setCaptchaVerified(false),
-      );
-    } catch (captchaError) {
-      setError(getTraineeAuthError(captchaError));
-    } finally {
-      setCaptchaLoading(false);
-    }
-  }, []);
+  const [otpNow, setOtpNow] = useState(0);
+  const [resendAvailableAt, setResendAvailableAt] = useState(0);
+  const resendSeconds = Math.max(0, Math.ceil((resendAvailableAt - otpNow) / 1000));
 
   useEffect(() => {
-    const initializationTimer = window.setTimeout(() => {
-      if (role === "trainee" && !confirmation) {
-        void prepareCaptcha();
-      } else {
-        destroyTraineeRecaptcha();
-        setCaptchaVerified(false);
-      }
-    }, 0);
-    return () => {
-      window.clearTimeout(initializationTimer);
-      destroyTraineeRecaptcha();
-    };
-  }, [confirmation, prepareCaptcha, role]);
+    if (!resendAvailableAt) return;
+    const timer = window.setInterval(() => setOtpNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendAvailableAt]);
+
+  function applyOtpRetryDelay(authError: unknown) {
+    const errorDetails = authError && typeof authError === "object" && "details" in authError ? authError.details : null;
+    const details = errorDetails && typeof errorDetails === "object" ? errorDetails as Record<string, unknown> : {};
+    const retryAfterSeconds = Number(details.retryAfterSeconds);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      setOtpNow(Date.now());
+      setResendAvailableAt(Date.now() + retryAfterSeconds * 1000);
+    }
+    return details.restartVerification === true;
+  }
+
+  async function requestTraineeCode() {
+    const challenge = await sendTraineeVerificationCode(mobile, identity);
+    setConfirmation(challenge);
+    setVerificationCode("");
+    setOtpNow(Date.now());
+    setResendAvailableAt(challenge.resendAvailableAt);
+  }
+
+  async function resendTraineeCode() {
+    if (loading || resendSeconds > 0) return;
+    setLoading(true);
+    setError("");
+    try {
+      await requestTraineeCode();
+    } catch (authError) {
+      setError(getTraineeAuthError(authError));
+      applyOtpRetryDelay(authError);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loading) return;
     setError("");
     setLoading(true);
 
@@ -147,20 +156,17 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
         const profile = await signInCompany(email, password);
         onLogin({ role: "company", profile });
       } else if (confirmation) {
-        const profile = await activateTraineeSession(confirmation, verificationCode, identity);
+        const profile = await activateTraineeSession(confirmation, verificationCode);
         onLogin({ role: "trainee", profile });
       } else {
         if (!identity.trim()) throw new Error("أدخل رقم الهوية أو المعرّف المسجل.");
-        setConfirmation(await sendTraineeVerificationCode(mobile));
+        await requestTraineeCode();
       }
     } catch (authError) {
       setError(role === "admin" ? getAdminAuthError(authError) : role === "company" ? getCompanyAuthError(authError) : getTraineeAuthError(authError));
-      if (role === "trainee" && !confirmation) {
-        setCaptchaVerified(false);
-        void prepareCaptcha();
-      }
+      const restartVerification = role === "trainee" && applyOtpRetryDelay(authError);
       const errorCode = typeof authError === "object" && authError && "code" in authError ? String(authError.code) : "";
-      if (confirmation && (errorCode.includes("permission-denied") || errorCode.includes("not-found"))) {
+      if (confirmation && (restartVerification || errorCode.includes("deadline-exceeded") || errorCode.includes("permission-denied") || errorCode.includes("not-found"))) {
         setConfirmation(null);
         setVerificationCode("");
       }
@@ -176,14 +182,12 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
     setVerificationCode("");
     setConfirmation(null);
     setEmail(nextRole === "admin" ? "admin@itti.edu.sa" : "");
-    setCaptchaVerified(false);
   }
 
   function editTraineeDetails() {
     setConfirmation(null);
     setVerificationCode("");
     setError("");
-    setCaptchaVerified(false);
   }
 
   return (
@@ -218,32 +222,26 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
           <p className="subcopy">{role === "trainee" ? "أدخل بياناتك المطابقة لسجل المعهد للوصول إلى دوراتك." : role === "company" ? "استخدم حساب ممثل الشركة المعتمد لمتابعة موظفيك." : "استخدم حسابك الإداري المعتمد لإدارة المنصة."}</p>
 
           <div className="role-switch" role="tablist" aria-label="نوع الحساب">
-            <button type="button" role="tab" aria-selected={role === "trainee"} className={role === "trainee" ? "active" : ""} onClick={() => changeRole("trainee")}>متدرب</button>
-            <button type="button" role="tab" aria-selected={role === "company"} className={role === "company" ? "active" : ""} onClick={() => changeRole("company")}>شركة</button>
-            <button type="button" role="tab" aria-selected={role === "admin"} className={role === "admin" ? "active" : ""} onClick={() => changeRole("admin")}>مسؤول المنصة</button>
+            <button type="button" role="tab" aria-selected={role === "trainee"} className={role === "trainee" ? "active" : ""} onClick={() => changeRole("trainee")} disabled={loading}>متدرب</button>
+            <button type="button" role="tab" aria-selected={role === "company"} className={role === "company" ? "active" : ""} onClick={() => changeRole("company")} disabled={loading}>شركة</button>
+            <button type="button" role="tab" aria-selected={role === "admin"} className={role === "admin" ? "active" : ""} onClick={() => changeRole("admin")} disabled={loading}>مسؤول المنصة</button>
           </div>
 
           <form onSubmit={submit}>
             {role === "trainee" ? (
               confirmation ? <>
-                <div className="verification-summary"><span>تم إرسال رمز التحقق إلى</span><strong dir="ltr">{mobile}</strong><button type="button" onClick={editTraineeDetails}>تعديل البيانات</button></div>
+                <div className="verification-summary"><span>تم إرسال رمز التحقق إلى</span><strong dir="ltr">{mobile}</strong><button type="button" onClick={editTraineeDetails} disabled={loading}>تعديل البيانات</button></div>
                 <label htmlFor="verification-code">رمز التحقق</label>
-                <input id="verification-code" inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" required autoFocus />
-                <p className="field-note">أدخل الرمز المكوّن من 6 أرقام المرسل عبر SMS.</p>
+                <input id="verification-code" inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" required autoFocus disabled={loading} />
+                <p className="field-note">أدخل الرمز المكوّن من 6 أرقام المرسل عبر SMS. صلاحية الرمز 5 دقائق.</p>
+                <button className="secondary-button" type="button" onClick={() => void resendTraineeCode()} disabled={loading || resendSeconds > 0}>{resendSeconds > 0 ? `إعادة إرسال الرمز بعد ${resendSeconds} ثانية` : "إعادة إرسال رمز التحقق"}</button>
               </> : <>
                   <label htmlFor="national-id">رقم الهوية أو المعرّف</label>
-                  <input id="national-id" autoComplete="off" value={identity} onChange={(e) => setIdentity(e.target.value)} placeholder="أدخل القيمة المسجلة لدى المعهد" required />
+                  <input id="national-id" autoComplete="off" value={identity} onChange={(e) => setIdentity(e.target.value)} placeholder="أدخل القيمة المسجلة لدى المعهد" required disabled={loading} />
                   <label htmlFor="mobile">رقم الجوال المسجل</label>
-                  <input id="mobile" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="05xxxxxxxx" required />
+                  <input id="mobile" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="05xxxxxxxx" required disabled={loading} />
                   <p className="field-note">سيصل رمز SMS إلى الجوال المسجل. باستخدام الخدمة توافق على إرسال رقم الجوال للتحقق.</p>
-                  <div className={`captcha-step ${captchaVerified ? "verified" : ""}`}>
-                    <div className="captcha-step-heading">
-                      <strong>التحقق الأمني</strong>
-                      <span aria-live="polite">{captchaLoading ? "جارٍ التحميل..." : captchaVerified ? "تم التحقق" : "مطلوب قبل الإرسال"}</span>
-                    </div>
-                    <div id="trainee-recaptcha" />
-                    {!captchaLoading && !captchaVerified ? <p>أكمل مربع التحقق لتفعيل زر إرسال رمز SMS.</p> : null}
-                  </div>
+                  {resendSeconds > 0 ? <p className="field-note" role="status">يمكن طلب رمز جديد بعد {resendSeconds} ثانية.</p> : null}
                 </>
             ) : (
               <>
@@ -254,7 +252,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: PlatformSession) => void 
               </>
             )}
             {error ? <p className="auth-error" role="alert">{error}</p> : null}
-            <button className="primary-button full" type="submit" disabled={loading || (role === "trainee" && !confirmation && !captchaVerified)}>{loading ? "جارٍ التحقق..." : role === "trainee" ? confirmation ? "تأكيد الرمز والدخول" : captchaVerified ? "إرسال رمز التحقق" : "أكمل التحقق الأمني أولًا" : role === "company" ? "دخول بوابة الشركة" : "دخول لوحة الإدارة"}</button>
+            <button className="primary-button full" type="submit" disabled={loading || (role === "trainee" && !confirmation && resendSeconds > 0)}>{loading ? "جارٍ التحقق..." : role === "trainee" ? confirmation ? "تأكيد الرمز والدخول" : "إرسال رمز التحقق" : role === "company" ? "دخول بوابة الشركة" : "دخول لوحة الإدارة"}</button>
           </form>
           <p className="demo-help">
             {role === "admin"

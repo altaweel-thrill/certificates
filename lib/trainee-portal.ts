@@ -1,4 +1,3 @@
-import type { ConfirmationResult, RecaptchaVerifier } from "firebase/auth";
 import type { DatabaseCertificateFile } from "./admin-database";
 import { getFirebaseAuth, getFirebaseFirestore, getFirebaseFunctions } from "./firebase";
 import type { TraineeProfile } from "./platform-session";
@@ -28,11 +27,12 @@ export type TraineePortalData = {
   availableFiles: number;
 };
 
-let recaptchaVerifier: RecaptchaVerifier | null = null;
-let recaptchaContainer: HTMLElement | null = null;
-let recaptchaVerified = false;
-const SMS_REQUEST_COOLDOWN_MS = 60_000;
-const SMS_REQUEST_TIMESTAMP_KEY = "itti:last-sms-request-at";
+export type TraineeVerificationChallenge = {
+  challengeId: string;
+  expiresAt: number;
+  resendAfterSeconds: number;
+  resendAvailableAt: number;
+};
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
@@ -81,117 +81,30 @@ export function normalizeSaudiMobile(value: string) {
   return "";
 }
 
-function toInternationalMobile(value: string) {
-  const local = normalizeSaudiMobile(value);
-  return local ? `+966${local.slice(1)}` : "";
-}
-
-export async function prepareTraineeRecaptcha(
-  onVerified: () => void,
-  onExpired: () => void,
-): Promise<void> {
-  const { RecaptchaVerifier, initializeRecaptchaConfig } = await import("firebase/auth");
-  const auth = await getFirebaseAuth();
-  auth.languageCode = "ar";
-  const isLocalDevelopment = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  auth.settings.appVerificationDisabledForTesting = isLocalDevelopment;
-  const container = document.getElementById("trainee-recaptcha");
-  if (!container) throw new Error("تعذر تهيئة التحقق الأمني. حدّث الصفحة وحاول مرة أخرى.");
-
-  destroyTraineeRecaptcha();
-  await initializeRecaptchaConfig(auth);
-  recaptchaContainer = container;
-  recaptchaVerifier = new RecaptchaVerifier(auth, container, {
-    size: isLocalDevelopment ? "invisible" : "normal",
-    callback: () => {
-      recaptchaVerified = true;
-      onVerified();
-    },
-    "expired-callback": () => {
-      recaptchaVerified = false;
-      onExpired();
-    },
-    "error-callback": () => {
-      recaptchaVerified = false;
-      onExpired();
-    },
-  });
-  await recaptchaVerifier.render();
-
-  // Local development uses Firebase test phone numbers and a mock verifier.
-  if (isLocalDevelopment) {
-    recaptchaVerified = true;
-    onVerified();
-  }
-}
-
-export async function sendTraineeVerificationCode(mobile: string): Promise<ConfirmationResult> {
-  const internationalMobile = toInternationalMobile(mobile);
-  if (!internationalMobile) throw new Error("أدخل رقم جوال سعودي صحيحًا يبدأ بـ 05.");
-
-  const lastRequestAt = Number(window.sessionStorage.getItem(SMS_REQUEST_TIMESTAMP_KEY) || 0);
-  const remainingSeconds = Math.ceil((SMS_REQUEST_COOLDOWN_MS - (Date.now() - lastRequestAt)) / 1000);
-  if (remainingSeconds > 0) {
-    const cooldownError = new Error(`انتظر ${remainingSeconds} ثانية قبل طلب رمز SMS جديد.`) as Error & { code: string };
-    cooldownError.code = "auth/sms-request-cooldown";
-    throw cooldownError;
-  }
-
-  if (!recaptchaVerifier || !recaptchaVerified) {
-    const captchaError = new Error("أكمل التحقق الأمني قبل طلب رمز SMS.") as Error & { code: string };
-    captchaError.code = "auth/captcha-not-completed";
-    throw captchaError;
-  }
-
-  const { signInWithPhoneNumber } = await import("firebase/auth");
-  const auth = await getFirebaseAuth();
-  window.sessionStorage.setItem(SMS_REQUEST_TIMESTAMP_KEY, String(Date.now()));
-  try {
-    const confirmation = await signInWithPhoneNumber(auth, internationalMobile, recaptchaVerifier);
-    destroyTraineeRecaptcha();
-    return confirmation;
-  } catch (error) {
-    destroyTraineeRecaptcha();
-    throw error;
-  }
-}
-
-export function resetTraineeRecaptcha() {
-  if (!recaptchaVerifier) return;
-  recaptchaVerified = false;
-  void recaptchaVerifier.render()
-    .then((widgetId) => {
-      const captchaApi = (window as typeof window & { grecaptcha?: { reset: (id?: number) => void } }).grecaptcha;
-      captchaApi?.reset(widgetId);
-    })
-    .catch(() => destroyTraineeRecaptcha());
-}
-
-export function destroyTraineeRecaptcha() {
-  try {
-    recaptchaVerifier?.clear();
-  } catch {
-    // Firebase may already have released a failed verifier.
-  }
-  recaptchaVerifier = null;
-  recaptchaVerified = false;
-  recaptchaContainer?.replaceChildren();
-  recaptchaContainer = null;
-}
-
-export async function activateTraineeSession(confirmation: ConfirmationResult, code: string, nationalId: string): Promise<TraineeProfile> {
+export async function sendTraineeVerificationCode(mobile: string, nationalId: string): Promise<TraineeVerificationChallenge> {
+  const localMobile = normalizeSaudiMobile(mobile);
+  if (!localMobile) throw new Error("أدخل رقم جوال سعودي صحيحًا يبدأ بـ 05.");
   const identity = nationalId.trim();
   if (!identity) throw new Error("أدخل رقم الهوية أو المعرّف المسجل.");
-  if (!/^\d{6}$/.test(digits(code))) throw new Error("رمز التحقق يجب أن يتكون من 6 أرقام.");
+  const { httpsCallable } = await import("firebase/functions");
+  const functions = await getFirebaseFunctions();
+  const send = httpsCallable<{ mobile: string; nationalId: string }, Omit<TraineeVerificationChallenge, "resendAvailableAt">>(functions, "sendTraineeOtp");
+  const { data } = await send({ mobile: localMobile, nationalId: identity });
+  return { ...data, resendAvailableAt: Date.now() + data.resendAfterSeconds * 1000 };
+}
 
-  await confirmation.confirm(digits(code));
-  const { signOut } = await import("firebase/auth");
+export async function activateTraineeSession(confirmation: TraineeVerificationChallenge, code: string): Promise<TraineeProfile> {
+  if (!/^\d{6}$/.test(digits(code))) throw new Error("رمز التحقق يجب أن يتكون من 6 أرقام.");
+  const { signInWithCustomToken, signOut } = await import("firebase/auth");
   const { httpsCallable } = await import("firebase/functions");
   const auth = await getFirebaseAuth();
   const functions = await getFirebaseFunctions();
-  const activate = httpsCallable<{ nationalId: string }, { profile: TraineeProfile }>(functions, "activateTraineeSession");
+  const verify = httpsCallable<{ challengeId: string; code: string }, { customToken: string; profile: TraineeProfile }>(functions, "verifyTraineeOtp");
+  const { data } = await verify({ challengeId: confirmation.challengeId, code: digits(code) });
   try {
-    return (await activate({ nationalId: identity })).data.profile;
+    const credential = await signInWithCustomToken(auth, data.customToken);
+    if (credential.user.uid !== data.profile.uid) throw new Error("تعذر اعتماد جلسة المتدرب.");
+    return data.profile;
   } catch (error) {
     await signOut(auth).catch(() => undefined);
     throw error;
@@ -269,26 +182,10 @@ export async function loadTraineePortal(profile: TraineeProfile): Promise<Traine
 export function getTraineeAuthError(error: unknown) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
   const message = error instanceof Error ? error.message : "";
-  const errorDetails = `${code} ${message}`.toLowerCase();
-  const isLocalDevelopment = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-  if (code.includes("sms-request-cooldown")) return message;
-  if (code.includes("captcha-not-completed")) return message;
-  if (code.includes("invalid-verification-code")) return "رمز التحقق غير صحيح.";
-  if (code.includes("code-expired")) return "انتهت صلاحية رمز التحقق. أرسل رمزًا جديدًا.";
-  if (code.includes("invalid-phone-number")) return "رقم الجوال غير صحيح.";
-  if (errorDetails.includes("error-code:-39") || code.includes("quota-exceeded") || code.includes("too-many-requests")) {
-    return "أوقف Firebase إرسال رموز SMS مؤقتًا بسبب كثرة الطلبات أو حماية شركة الاتصال. لا تكرر المحاولة الآن، وانتظر حتى يُرفع القيد ثم اطلب رمزًا جديدًا.";
-  }
-  if (code.includes("unauthorized-domain") || code.includes("app-not-authorized")) return "نطاق الموقع غير مضاف ضمن Authorized domains في Firebase Authentication.";
-  if (code.includes("operation-not-allowed")) return "تسجيل الدخول برقم الجوال غير مفعّل في Firebase Authentication.";
-  if (code.includes("captcha-check-failed") || code.includes("invalid-app-credential")) {
-    return isLocalDevelopment
-      ? "وضع localhost يقبل فقط رقم اختبار مضافًا في Firebase Phone numbers for testing؛ لا تستخدم رقم جوال حقيقي هنا."
-      : "تعذر اعتماد reCAPTCHA. تحقق من إضافة نطاق الموقع إلى Authorized domains ثم أعد المحاولة.";
-  }
-  if (code.includes("functions/internal") || code.includes("functions/unavailable") || code.includes("functions/unimplemented")) {
-    return "خدمة دخول المتدربين غير متاحة حالياً. يجب على مسؤول النظام نشر تحديث Cloud Functions ثم المحاولة مرة أخرى.";
-  }
-  if (code.includes("permission-denied") || code.includes("not-found")) return "رقم الهوية لا يطابق رقم الجوال المسجل لدى المعهد.";
+  if (code.startsWith("functions/") && !code.includes("internal") && message) return message;
+  if (code.includes("invalid-custom-token") || code.includes("custom-token-mismatch")) return "تعذر اعتماد جلسة الدخول. تواصل مع إدارة المعهد.";
+  if (code.includes("user-disabled")) return "الحساب معطّل. تواصل مع إدارة المعهد.";
+  if (code.includes("network-request-failed")) return "تعذر الاتصال. تحقق من اتصال الإنترنت وحاول مرة أخرى.";
+  if (code.includes("functions/internal")) return "خدمة دخول المتدربين غير متاحة حاليًا. تواصل مع إدارة المعهد.";
   return message || "تعذر تسجيل دخول المتدرب.";
 }

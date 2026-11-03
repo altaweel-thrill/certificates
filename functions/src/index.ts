@@ -4,6 +4,8 @@ import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { CallableRequest, HttpsError, onCall } from "firebase-functions/v2/https";
 import { createHash } from "node:crypto";
 
+export { sendTraineeOtp, verifyTraineeOtp } from "./trainee-otp";
+
 initializeApp();
 
 const REGION = "europe-west1";
